@@ -1,6 +1,6 @@
 # Echo
 
-[![Paper](https://img.shields.io/badge/Paper-arXiv-blue)](https://arxiv.org/abs/2602.11909)[![Data](https://img.shields.io/badge/Data-huggingface-orange)](https://huggingface.co/datasets/wudq/EAQA)
+[![Paper](https://img.shields.io/badge/Paper-arXiv-blue)](https://arxiv.org/abs/2602.11909) [![Data](https://img.shields.io/badge/Data-huggingface-orange)](https://huggingface.co/datasets/wudq/EAQA)
 
 Project page of "**2026-ICLR Echo: Towards Advanced Audio Comprehension via Audio-Interleaved Reasoning**".
 
@@ -62,12 +62,12 @@ Stage 3 performs multi-turn inference and benchmark evaluation.
 Since we use vLLM for rollout, the multi-turn RL training is implemented mainly through the modify the vllm rollout logic. 
 
 The core modification is in: `verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py`. Specifically, we modify the `generate_sequences` function so that the model can perform multi-turn reasoning during rollout. In addition, when computing response_mask, we mask out audio tokens via:
+
 ```audio_token_mask = (response == 151646) | (response == 151647) | (response == 151648) | (response == 151645)```
 
 This ensures that audio special tokens are excluded appropriately in the response mask during training.
 
-Please note that in this released version of verl, the rollout behavior is multi-turn by default. If you want to restore the original rollout behavior, please replace the modified `generate_sequences` with the original one from:
-```verl/workers/rollout/vllm_rollout/vllm_rollout_spmd_backup.py```
+Please note that in this released version of verl, the rollout behavior is multi-turn by default. If you want to restore the original rollout behavior, please replace the modified `generate_sequences` with the original one from `verl/workers/rollout/vllm_rollout/vllm_rollout_spmd_backup.py`.
 
 
 ## 📌 Citation
