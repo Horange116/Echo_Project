@@ -1,0 +1,61 @@
+You are given some musical attributes of an audio clip, including:
+
+A1: A detailed description of the audio content.
+A2: A list of chords along with their corresponding start timestamps (in second).
+A3: The tempo of the audio in beats per minute (BPM).
+A4: Timestamps of all detected beats throughout the audio (in second).
+These are used to simulate your understanding as if you had listened to the actual audio. You MUST treat them as your internal interpretation of "the audio", and you MUST NOT reference A1–A4 or "the audio description" explicitly in your output.
+
+Your goal is to generate challenging question–answer–chain-of-thought (CoT) triplets in the following format:
+{
+  [QUESTION_TEXT]: "A question that requires listening to the audio to answer accurately.",
+  [MULTI_CHOICE]: [a, b, c, d],
+  [ANSWER]: the correct answer,
+  [COT]: [think]...your reasoning here...[/think][answer]...[/answer]
+}
+
+REQUIREMENTS:
+1. Question Design:
+The question must be answerable only by listening to the audio.
+The question should be expert-level, may ask about (but not confined to):
+  Precise identification of chord changes over time;
+  Comparison of rhythmic patterns or tempo fluctuations;
+  Inference of musical structure based on timing or harmonic progression;
+
+2. Multiple Choice Options:
+The correct answer must be unambiguously supported by the audio.
+The incorrect answers must be plausible, but clearly incorrect when grounded in the audio.
+
+3. Chain-of-Thought (CoT):
+The reasoning process must be natural, fluent, and well-structured. Avoid using bullet points or numbering.
+Each time a specific piece of evidence from the audio is discussed, the relevant audio segment must be explicitly referenced first, using the format <seg>start_second, end_second</seg> (e.g., <seg>3.3, 5.7</seg>).
+For example:
+  “In <seg>2.1, 4.3</seg>, the guitar introduces a rising arpeggio that signals a transition into a new harmonic region.”
+  “Listening to <seg>0.0, 1.6</seg>, we hear a slow piano introduction that sets a melancholic mood.”
+For expert-level questions, the CoT should:
+  Include technical musical concepts when appropriate
+  Show clear multi-step reasoning before concluding the answer
+Each CoT must include at least one segment reference, unless the provided segments all span the entire audio duration.
+General reasoning steps not tied to any specific moment do not require segment tags.
+
+4. Use of Simulated Inputs (A1–A4):
+Treat A1–A4 as your internal hearing/understanding of the audio.
+Refer to any sounds or events by saying they occurred “in the audio”. You MUST NOT refer to A1–A4 or "the audio description" as external annotations.
+
+Example:
+A1: This relaxing song is perfect for a coffee shop setting. With no vocals, the electric guitar takes the lead, starting with a descending run before moving into an arpeggiated chord and double stop hammer-on to a higher note. A descending slide follows, along with a chord run while the simple percussion keeps time with rim shots. The bass plays a single note on the first count of each bar while the piano provides backing chords. All of this comes together in common time, with a beat of four that will create a laid-back atmosphere.
+A2: {"E": 0.4}
+A3: 157.0
+A4: [0.3, 0.6, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.3, 3.7, 4.1, 4.5, 4.9, 5.3, 5.7, 6.0, 6.4, 6.8, 7.2, 7.6, 8.0]
+Output: {
+  [QUESTION_TEXT]: How does the bass instrument reinforce the metric structure in the first 4 bars?
+  [MULTI_CHOICE]: [By playing syncopated off-beat patterns, By emphasizing each beat equally with rapid notes, By exclusively highlighting the downbeat of every measure, By alternating between root and fifth every two beats]
+  [ANSWER]: By exclusively highlighting the downbeat of every measure
+  [COT]: [think]To understand the bass’s role, I started by figuring out where each measure begins. In <seg>0.3, 1.8</seg>, the first downbeat appears at 0.3 seconds, and the second at 1.8 seconds. Right after the first downbeat, the bass plays a single low note that fades before the next beat. In <seg>0.6, 1.8</seg>, no other bass notes are heard. This pattern continues: at <seg>3.3, 3.4</seg> and <seg>4.9, 5.0</seg>, the bass hits just once at the start of each bar. With no extra bass between beats, and the guitar and piano filling in the harmony, the bass mainly supports the rhythm by clearly marking each downbeat.[/think][answer]By exclusively highlighting the downbeat of every measure[/answer]
+}
+
+A1: [DESCRIPTION]
+A2: [CHORDS]
+A3: [BPM]
+A4: [BEATS]
+Do not output contents other than the question–answer–chain-of-thought (CoT) triplets.

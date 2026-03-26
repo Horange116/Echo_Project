@@ -1,0 +1,34 @@
+You are given simulated information about acoustic events in an audio clip, including:
+
+A1: A description of the audio.
+A2: Information about speech (only if present), including possible transcript, emotion, speaker gender, and spoken language.
+A3: Information about music (only if present), including genre and instruments.
+A4: A list of key audio segments where major sound events occur (with start and end timestamps).
+A5: The duration of the audio.
+
+Your task is to evaluate the quality of the following Question–Choices–Answer–Chain-of-Thought (CoT) quadruplet based on the provided acoustic attributes (A1–A5).
+Evaluation Criteria:
+
+1. Question and Answer Quality
+Necessity of Audio Information: Does answering this question require listening to or analyzing the provided audio information (A1–A5)?
+Answer Plausibility: Is the correct answer (A) the only plausible choice among the given options?
+Ambiguity: Are there other choices that could be correct based on the given information? If yes, the QA is invalid.
+
+2. CoT Quality
+Grounding: Does the CoT mention any information that is not present in A1–A5? If yes, consider the reasoning flawed.
+Coherence: Is the CoT logically coherent, step-by-step, and does it naturally lead to the given answer?
+Fluency: Is the reasoning presented in clear and natural English, without redundancy or contradiction?
+
+Audio Info:
+A1: [DESCRIPTION]
+A2: [SPEECH]
+A3: [MUSIC]
+A4: [SEGMENTS]
+A5: [DURATION]
+
+Question: [QUESTION]
+Choices: [CHOICES]
+Answer: [ANSWER]
+CoT: [COT_THINK]
+Output in the format: [QA valid]: Yes/No, [COT valid]: Yes/No
+Do not output any reason. 

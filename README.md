@@ -1,18 +1,22 @@
 # Echo
 
-[![Paper](https://img.shields.io/badge/Paper-arXiv-blue)](https://arxiv.org/abs/2602.11909)
+[![Paper](https://img.shields.io/badge/Paper-arXiv-blue)](https://arxiv.org/abs/2602.11909)[![Data](https://img.shields.io/badge/Data-huggingface-orange)](https://huggingface.co/datasets/wudq/EAQA)
 
 Project page of "**2026-ICLR Echo: Towards Advanced Audio Comprehension via Audio-Interleaved Reasoning**".
 
 Echo introduces an **audio-interleaved reasoning paradigm** that enables LALMs to proactively re-listen to relevant audio segments during the reasoning process.
 
    <div align="center">
-     <img src="images/m1.jpeg" width="40%">
+     <img src="images/m2.png" width="100%">
      <br>
-     <em>Figure 1: Example of the audio-interleaved reasoning.</em>
+     <em>Figure 1: Comparison between audio-conditioned text reasoning and audio-interleaved reasoning.</em>
    </div>
 
-Due to internal company policy, training datasets and model checkpoints cannot be released at this moment. However, to ensure transparency and reproducibility, we release **the complete training and inference code** in this repository. Researchers can reproduce our framework using their own datasets following the formats described below.
+Due to internal company policy, training datasets (mainly CoT) and model checkpoints cannot be fully released at this moment. However, to make the repository easier to use and improve reproducibility, we additionally release the following resources in this repository:
+1. **EAQA-SFT 100-sample subset**, which is provided as a reference for the expected Stage 1 training data format
+2. **The complete EAQA-RL dataset**, which can be directly used for Stage 2 RL training.
+3. **The prompts used for data construction**, released under the prompt/ directory for reference.
+4. **The complete training and inference code**, so researchers can reproduce our framework using their own datasets or the released subsets described above.
 
 ## 🚀 Usage
 
@@ -52,6 +56,19 @@ Stage 3 performs multi-turn inference and benchmark evaluation.
 5. Modify script/inference.sh by setting checkpoint to the merged `target_dir` and setting `n_gpu` to the number of available GPUs.
 6. Run inference: `bash script/inference.sh`.
 7. The script will sequentially perform inference on MMAR, MMAU-mini, and MMAU datasets, evenly distribute samples across GPUs, merge prediction results, and finally run the official evaluation scripts to compute metrics.
+
+## 🔧 Modifications to verl
+
+Since we use vLLM for rollout, the multi-turn RL training is implemented mainly through the modify the vllm rollout logic. 
+
+The core modification is in: `verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py`. Specifically, we modify the `generate_sequences` function so that the model can perform multi-turn reasoning during rollout. In addition, when computing response_mask, we mask out audio tokens via:
+```audio_token_mask = (response == 151646) | (response == 151647) | (response == 151648) | (response == 151645)```
+
+This ensures that audio special tokens are excluded appropriately in the response mask during training.
+
+Please note that in this released version of verl, the rollout behavior is multi-turn by default. If you want to restore the original rollout behavior, please replace the modified `generate_sequences` with the original one from:
+```verl/workers/rollout/vllm_rollout/vllm_rollout_spmd_backup.py```
+
 
 ## 📌 Citation
 If you find this work useful, please consider citing our paper:

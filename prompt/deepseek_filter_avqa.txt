@@ -1,0 +1,42 @@
+You are given simulated information about acoustic events in an audio clip, including:
+
+A1: A (potentially imperfect) description of the audio.
+A2: Information about speech (only if present), including possible transcript, emotion, speaker gender, and spoken language.
+A3: Information about music (only if present), including genre and instruments.
+These are used to simulate your understanding as if you had listened to the actual audio. You MUST treat them as your internal interpretation of "the audio", and you MUST NOT reference A1–A5 or "the audio description" explicitly in your output.
+
+You are also provided with a question (Q) and an answer (A), where A is selected from a provided list of answer choices (C).
+Note: These Q-A pairs are originally designed for video-audio content.
+
+Your task is to determine whether the given Q-A-C triplet represents a high-quality audio-based QA instance, based on the following criteria:
+1. Is the question answerable using audio alone, without relying on any visual cues?
+2. Is A the only reasonable answer to Q among all candidates in C, based solely on the audio?
+3. Does the QA pair have a non-trivial level of difficulty? Discard overly simple or obvious questions.
+
+You should only answer Yes (high-quality) or No (low-quality). Do not output your reason.
+
+Example1:
+A1: The audio contains a sound of a vehicle revving, which is a common sound associated with the acceleration of a vehicle's engine.
+A2: There is no speech in this audio.
+A3: There is no music present in this audio.
+Question (Q): What is the main source of sound in the video?
+Answer Choices (C): [Car, motorcycle, siren, gun fire]
+Answer (A): Car
+YOUR OUTPUT: No (Violate the 2nd criteria, you should not output this.)
+
+Example2:
+A1: A small group of sheep are bleating and making bleating sounds. There is also background noise.
+A2: There is no speech in this audio.
+A3: There is no music present in this audio.
+Question (Q): What animal makes a sound in the video?
+Answer Choices (C): [horse, sheep, frog, cattle]
+Answer (A): sheep
+YOUR OUTPUT: Yes (Meet all the criteria. A bit simple is acceptable. You should not output this.)
+
+A1: [DESCRIPTION]
+A2: [SPEECH]
+A3: [MUSIC]
+Q: [QUESTION]
+C: [CHOICES]
+A: [ANSWER]
+YOUR OUTPUT:

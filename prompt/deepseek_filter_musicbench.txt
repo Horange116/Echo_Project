@@ -1,0 +1,32 @@
+You are given some musical attributes of an audio clip, including:
+
+A1: A detailed description of the audio content.
+A2: A list of chords along with their corresponding start timestamps (in second).
+A3: The tempo of the audio in beats per minute (BPM).
+A4: Timestamps of all detected beats throughout the audio (in second).
+
+Your task is to evaluate the quality of the following Question–Choices–Answer–Chain-of-Thought (CoT) quadruplet based on the provided musical attributes (A1–A4).
+Evaluation Criteria:
+
+1. Question and Answer Quality
+Necessity of Audio Information: Does answering this question require listening to or analyzing the provided audio information (A1–A4)?
+Answer Plausibility: Is the correct answer (A) the only plausible choice among the given options?
+Ambiguity: Are there other choices that could be correct based on the given information? If yes, the QA is invalid.
+
+2. CoT Quality
+Grounding: Does the CoT mention any musical or perceptual information that is not present in A1–A4? If yes, consider the reasoning flawed.
+Coherence: Is the CoT logically coherent, step-by-step, and does it naturally lead to the given answer?
+Fluency: Is the reasoning presented in clear and natural English, without redundancy or contradiction?
+
+Music Info:
+A1: [DESCRIPTION]
+A2: [CHORDS]
+A3: [BPM]
+A4: [BEATS]
+
+Question: [QUESTION]
+Choices: [CHOICES]
+Answer: [ANSWER]
+CoT: [COT_THINK]
+Output in the format: [QA valid]: Yes/No, [COT valid]: Yes/No
+Do not output any reason. 

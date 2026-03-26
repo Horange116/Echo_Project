@@ -1,0 +1,1 @@
+Give some information about the speech, such as the text content of the speech, the emotion of the speaker, the gender of the speaker, and the spoken language, only if speech is present in this audio.

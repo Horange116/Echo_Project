@@ -1,0 +1,60 @@
+You are given simulated information about acoustic events in an audio clip, including:
+
+A1: A description of the audio.
+A2: Information about speech (only if present), including possible transcript, emotion, speaker gender, and spoken language.
+A3: Information about music (only if present), including genre and instruments.
+A4: A list of key audio segments where major sound events occur (with start and end timestamps).
+A5: The duration of the audio.
+These are used to simulate your understanding as if you had listened to the actual audio. You MUST treat them as your internal interpretation of "the audio", and you MUST NOT reference A1–A5 or "the audio description" explicitly in your output.
+
+Your goal is to generate challenging question–answer–chain-of-thought (CoT) triplets in the following format:
+{
+  [QUESTION_TEXT]: "A question that requires listening to the audio to answer accurately.",
+  [MULTI_CHOICE]: [a, b, c, d],
+  [ANSWER]: the correct answer,
+  [COT]: [think]...your reasoning here...[/think][answer]...[/answer]
+}
+
+REQUIREMENTS:
+1. Question Design:
+The question must be answerable only by listening to the audio.
+It should require non-trivial inference, going beyond surface-level perception.
+The question may either involve explicit temporal framing (e.g., asking what happened first, last, or at the same time) or be temporally neutral (e.g., asking about a specific sound, event, or emotion).
+However, the answer must require temporal reasoning—such as identifying the order of events, comparing the lengths of different segments, or detecting overlaps in time.
+
+2. Multiple Choice Options:
+The correct answer must be unambiguously supported by the audio.
+The incorrect answers must be plausible, but clearly incorrect when grounded in the audio.
+
+3. Chain-of-Thought (CoT):
+The reasoning process must be natural, fluent, and well-structured. Avoid using bullet points or numbering.
+Each time a specific piece of evidence from the audio is discussed, the relevant audio segment must be explicitly referenced first, using the format <seg>start_second, end_second</seg> (e.g., <seg>3.3, 5.7</seg>).
+For example:
+“In <seg>0.4, 2.5</seg>, the speaker raises their voice, suggesting urgency.”
+“By listening to <seg>0.3, 1.9</seg>, we can infer that a dog is barking in the background.”
+Each CoT must include at least one segment reference, unless the provided segments all span the entire audio duration.
+General reasoning steps not tied to any specific moment do not require segment tags.
+
+4. Use of Simulated Inputs (A1–A5):
+Treat A1–A5 as your internal hearing/understanding of the audio.
+Refer to any sounds or events by saying they occurred “in the audio”. You MUST NOT refer to A1–A5 or "the audio description" as external annotations.
+
+Example:
+A1: The audio contains a speech across a range of times, a siren sound, and breathing.
+A2: There is speech in Mandarin with a male speaker, expressing a fearful mood. The speech content is 'more than a copper are falling down here.
+A3: There is no music in this audio.
+A4: {"strong_events": [{"time_range": "0.0s - 1.4s", "label": "Male speech, man speaking"}, {"time_range": "0.0s - 2.0s", "label": "Wind"}, {"time_range": "1.7s - 2.0s", "label": "Tick"}, {"time_range": "2.1s - 10.0s", "label": "Wind"}, {"time_range": "2.4s - 2.6s", "label": "Tick"}, {"time_range": "3.0s - 3.1s", "label": "Tap"}, {"time_range": "3.2s - 3.4s", "label": "Tick"}, {"time_range": "3.6s - 4.1s", "label": "Surface contact"}, {"time_range": "4.1s - 4.9s", "label": "Male speech, man speaking"}, {"time_range": "4.9s - 5.7s", "label": "Breathing"}, {"time_range": "5.9s - 6.0s", "label": "Tick"}, {"time_range": "6.0s - 6.7s", "label": "Male speech, man speaking"}, {"time_range": "6.3s - 10.0s", "label": "Emergency vehicle"}, {"time_range": "6.9s - 7.4s", "label": "Male speech, man speaking"}, {"time_range": "9.2s - 9.9s", "label": "Male speech, man speaking"}]}
+A5: 10.0
+Output: {
+  [QUESTION_TEXT]: How long after the surface contact sound ends does the man next speak?,
+  [MULTI_CHOICE]: [0 seconds (immediately after), 0.3 seconds, 0.8 seconds, 1.2 seconds],
+  [ANSWER]: 0 seconds (immediately after),
+  [COT]: [think]In <seg>3.6, 4.1</seg>, the surface contact occurs, ending at 4.1 seconds. Immediately after, in <seg>4.1, 4.9</seg>, the man begins speaking again. Since the speech starts at the exact moment the surface contact ends, there is no temporal gap between the two events. Therefore, the man speaks immediately after the surface contact ends.[/think][answer]0 seconds (immediately after)[/answer],
+}
+
+A1: [DESCRIPTION]
+A2: [SPEECH]
+A3: [MUSIC]
+A4: [SEGMENTS]
+A5: [DURATION]
+Do not output contents other than the question–answer–chain-of-thought (CoT) triplets.

@@ -1,0 +1,59 @@
+You are given some musical attributes of an audio clip, including:
+
+A1: A detailed description of the audio content.
+A2: A list of chords along with their corresponding start timestamps (in second).
+A3: The tempo of the audio in beats per minute (BPM).
+A4: Timestamps of all detected beats throughout the audio (in second).
+These are used to simulate your understanding as if you had listened to the actual audio. You MUST treat them as your internal interpretation of "the audio", and you MUST NOT reference A1–A4 or "the audio description" explicitly in your output.
+
+Your goal is to generate challenging question–answer–chain-of-thought (CoT) triplets in the following format:
+{
+  [QUESTION_TEXT]: "A question that requires listening to the audio to answer accurately.",
+  [MULTI_CHOICE]: [a, b, c, d],
+  [ANSWER]: the correct answer,
+  [COT]: [think]...your reasoning here...[/think][answer]...[/answer]
+}
+
+REQUIREMENTS:
+1. Question Design:
+The question must be answerable only by listening to the audio.
+The question shoud be basic, may ask about (but not confined to): 
+  Instrument types present in the audio;
+  The overall emotion conveyed by the music;
+  General loudness or dynamic shifts;
+
+2. Multiple Choice Options:
+The correct answer must be unambiguously supported by the audio.
+The incorrect answers must be plausible, but clearly incorrect when grounded in the audio.
+
+3. Chain-of-Thought (CoT):
+The reasoning process must be natural, fluent, and well-structured. Avoid using bullet points or numbering.
+Each time a specific piece of evidence from the audio is discussed, the relevant audio segment must be explicitly referenced first, using the format <seg>start_second, end_second</seg> (e.g., <seg>3.3, 5.7</seg>).
+For example:
+  “In <seg>2.1, 4.3</seg>, the guitar introduces a rising arpeggio that signals a transition into a new harmonic region.”
+  “Listening to <seg>0.0, 1.6</seg>, we hear a slow piano introduction that sets a melancholic mood.”
+For basic questions, the reasoning can refer to fewer segments (1-2, preferably under 5 seconds) and use basic musical understanding.
+Each CoT must include at least one segment reference, unless the provided segments all span the entire audio duration.
+General reasoning steps not tied to any specific moment do not require segment tags.
+
+4. Use of Simulated Inputs (A1–A4):
+Treat A1–A4 as your internal hearing/understanding of the audio.
+Refer to any sounds or events by saying they occurred “in the audio”. You MUST NOT refer to A1–A4 or "the audio description" as external annotations.
+
+Example:
+A1: This is a relaxing song that features an electric guitar as the main instrument with a descending run at the beginning. The guitar plays an arpeggiated chord followed by a double stop hammer, descending slide and chord run throughout. The percussion plays a simple beat with rim shots in common time. The bass plays one note at the start of each bar whilst the piano provides backing chords. The song has no vocals and can be played in a coffee shop setting. The chord progression is in E.
+A2: {"E": 0.3}
+A3: 148.0
+A4: [0.3, 0.7, 1.1, 1.5, 1.9, 2.3, 2.7, 3.1, 3.5, 3.9, 4.3, 4.8, 5.2, 5.6, 6.0, 6.4, 6.8, 7.2, 7.6, 8.0, 8.4]
+Output: {
+  [QUESTION_TEXT]: Which word best describes the overall emotion conveyed by this instrumental track?
+  [MULTI_CHOICE]: [calm, energetic, tense, exciting]
+  [ANSWER]: calm
+  [COT]: [think]At the start of the track in <seg>0.0, 1.6</seg>, a smooth descending guitar line sets a mellow, relaxed tone. The bass joins with one note per bar, adding steadiness without force. The piano plays soft, sustained chords instead of sharp rhythms. Throughout the track—such as in <seg>3.5, 5.6</seg>—the percussion uses rim shots in a steady, simple pattern, offering a gentle texture that reinforces the calm, unhurried mood.[/think][answer]calm[/answer]
+}
+
+A1: [DESCRIPTION]
+A2: [CHORDS]
+A3: [BPM]
+A4: [BEATS]
+Do not output contents other than the question–answer–chain-of-thought (CoT) triplets.
