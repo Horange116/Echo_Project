@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.DS_Store
+
+# Large local datasets and generated artifacts.
+dataJson/
+mnt/
+EchoMind/
+output/GeneratedData/
+output/dataPreparedRes/
+output/testResult/
+
+# Large binary/data formats that GitHub should not receive.
+*.zip
+*.parquet
+*.pt
+*.pth
+*.safetensors
+*.jsonl
+
+# Runtime logs.
+*.out
+*.err
+*.log
+slurm-*.out
+nccl_debug.log
