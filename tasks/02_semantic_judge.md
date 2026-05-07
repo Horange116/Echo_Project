@@ -23,11 +23,12 @@
 
 ### 新增文件
 
-| 文件 | 路径 |
-|------|------|
-| judge_eaqa_candidates.py | `scripts/judge_eaqa_candidates.py` |
+| 文件 | 路径 | 说明 |
+|------|------|------|
+| judge_eaqa_candidates.py | `scripts/judge_eaqa_candidates.py` | 语义重评 Judge |
+| build_judge_subset.py | `scripts/build_judge_subset.py` | 分层抽样（来源段 + 题型） |
 
-### 参数列表
+### scripts/judge_eaqa_candidates.py 参数列表
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -46,6 +47,29 @@
 | `--max_tokens` | 128 | 最大生成 token |
 | `--resume` | true | 断点续跑 |
 | `--retry_failed` | false | 重试失败样本 |
+| `--concurrency` | 1 | 并发线程数（>1 使用 ThreadPoolExecutor） |
+| `--qps_limit` | 0 | 每秒请求数上限，0=不限 |
+| `--progress_every` | 20 | 每 N 条打印一次进度 |
+
+### scripts/build_judge_subset.py 参数列表
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--input_jsonl` | 必填 | 输入候选数据 JSONL |
+| `--output_jsonl` | 必填 | 输出 subset JSONL |
+| `--report_json` | 必填 | 统计报告 JSON |
+| `--seed` | 42 | 随机种子 |
+| `--polished_range` | `0:3000` | DeepSeek 润色段的 index 范围 |
+| `--polished_per_type` | 38 | 润色段每个 type 抽多少条 |
+| `--template_per_type` | 38 | 模板段每个 type 抽多少条 |
+| `--max_total` | 600 | 最多输出多少条 |
+| `--type_field_candidates` | `type,qa_type,skeleton_type` | type 字段优先级 |
+
+subset 按 "source_group + type" 分层抽样：
+- index in polished_range → `deepseek_polished`
+- index >= polished_range → `template_or_unpolished`
+- 每个 group 内再按 type 分组分别抽样
+- 超过 max_total 则用固定 seed 随机截断
 
 ### 字段兼容
 
@@ -87,16 +111,37 @@ python scripts/judge_eaqa_candidates.py \
   --sleep_seconds 0.5
 ```
 
+**分层抽样 + 并发 judge（600 条诊断）:**
+```bash
+# 1. 构建分层抽样 subset
+python scripts/build_judge_subset.py \
+  --input_jsonl /path/to/candidates_with_a1_a3.jsonl \
+  --output_jsonl output/judge/judge_subset_600.jsonl \
+  --report_json output/judge/judge_subset_report.json \
+  --polished_range 0:3000 \
+  --polished_per_type 38 \
+  --template_per_type 38 \
+  --max_total 600
+
+# 2. 并发 12 跑 judge
+python scripts/judge_eaqa_candidates.py \
+  --input_jsonl output/judge/judge_subset_600.jsonl \
+  --output_jsonl output/judge/judged_600.jsonl \
+  --report_json output/judge/judged_600_report.json \
+  --base_url https://your-api/v1 \
+  --model deepseek-reasoner \
+  --concurrency 12 \
+  --sleep_seconds 0 \
+  --resume
+```
+
 **断点续跑:**
 ```bash
 python scripts/judge_eaqa_candidates.py \
-  --input_jsonl output/GeneratedData/eaqa_sft_generated.jsonl \
-  --output_jsonl output/judge/full_judged.jsonl \
-  --report_json output/judge/full_report.json \
-  --base_url https://third-party-api.com/v1 \
-  --model deepseek-reasoner \
-  --start_index 0 \
-  --max_samples 500 \
+  --input_jsonl output/judge/judge_subset_600.jsonl \
+  --output_jsonl output/judge/judged_600.jsonl \
+  --base_url https://your-api/v1 \
+  --concurrency 12 \
   --resume
 ```
 
@@ -127,6 +172,8 @@ python scripts/judge_eaqa_candidates.py \
     "max_tokens": 128,
     "max_retries": 3,
     "sleep_seconds": 0.2,
+    "concurrency": 12,
+    "qps_limit": 0,
     "resume": true,
     "retry_failed": false
   },
