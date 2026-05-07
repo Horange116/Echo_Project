@@ -6,9 +6,10 @@ set -e
 
 # ─── 配置区 ────────────────────────────────────
 # 第三方中转 API 地址（按需修改）
-BASE_URL="https://api.xxx.com/v1"
+BASE_URL="https://yinli.one/v1"
 MODEL="deepseek-reasoner"
-# API Key 环境变量名（默认 ECHO_JUDGE_API_KEY）
+# API Key — 填在这里则自动 export，不填则读取环境变量 ECHO_JUDGE_API_KEY
+API_KEY=""
 API_KEY_ENV="ECHO_JUDGE_API_KEY"
 
 # 输入输出路径
@@ -17,9 +18,11 @@ OUTPUT_DIR="output/judge"
 # ──────────────────────────────────────────────
 
 # 检查 API Key
-if [ -z "${!API_KEY_ENV}" ]; then
+if [ -n "$API_KEY" ]; then
+    export "$API_KEY_ENV"="$API_KEY"
+elif [ -z "${!API_KEY_ENV}" ]; then
     echo "错误: 环境变量 $API_KEY_ENV 未设置"
-    echo "请先执行: export $API_KEY_ENV=sk-your-key"
+    echo "请先在脚本中填写 API_KEY，或执行: export $API_KEY_ENV=sk-your-key"
     exit 1
 fi
 
