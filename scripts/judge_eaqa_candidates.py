@@ -338,7 +338,7 @@ def main():
                     continue
                 try:
                     existing = json.loads(line)
-                    eid = get_id(existing)
+                    eid = get_id(existing) or existing.get("judge_sample_id")
                     if eid:
                         # 如果 retry_failed，跳过 judge_error 且 qa_valid/cot_valid 都为 null 的
                         if args.retry_failed:
@@ -452,6 +452,7 @@ def main():
         output_record["judge_error"] = judge_error
         output_record["judge_model"] = args.model
         output_record["judge_base_url_host"] = judge_base_url_host
+        output_record["judge_sample_id"] = sample_id
         output_record["judge_timestamp"] = datetime.now(timezone.utc).isoformat()
 
         out_fp.write(json.dumps(output_record, ensure_ascii=False) + "\n")
@@ -475,7 +476,7 @@ def main():
     out_fp.close()
 
     # ── Report ──
-    total_input = len(sliced) + skip_count
+    total_input = len(sliced)
     report = {
         "input_jsonl": args.input_jsonl,
         "output_jsonl": args.output_jsonl,
