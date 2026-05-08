@@ -30,7 +30,12 @@ import librosa
 import numpy as np
 import torch
 from peft import PeftModel
-from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
+from transformers import (
+    Qwen2_5OmniForConditionalGeneration,
+    Qwen2_5OmniProcessor,
+    StoppingCriteria,
+    StoppingCriteriaList,
+)
 
 SEG_PATTERN = re.compile(r"<seg>\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*</seg>")
 THINK_ANSWER_PATTERN = re.compile(
@@ -38,6 +43,33 @@ THINK_ANSWER_PATTERN = re.compile(
     re.S,
 )
 SAMPLE_RATE = 16000
+
+
+class SegStoppingCriteria(StoppingCriteria):
+    """在生成到第一个完整 </seg> 或 </answer> 时停止。"""
+
+    def __init__(self, tokenizer, prompt_length):
+        self.tokenizer = tokenizer
+        self.prompt_length = prompt_length
+        self.stop_reason = None  # "seg", "answer", None
+
+    def __call__(self, input_ids, scores, **kwargs):
+        new_ids = input_ids[0][self.prompt_length:]
+        if len(new_ids) == 0:
+            return False
+        text = self.tokenizer.decode(new_ids, skip_special_tokens=True)
+
+        # answer 优先（如果 model 直接给出答案不带 seg）
+        if "</answer>" in text:
+            self.stop_reason = "answer"
+            return True
+
+        # 检测到完整 </seg> 就暂停
+        if "</seg>" in text:
+            self.stop_reason = "seg"
+            return True
+
+        return False
 
 
 def build_initial_prompt(question, choices):
@@ -122,7 +154,14 @@ def load_model_and_processor(model_path, adapter_path=None):
 def run_interleaved(model, processor, audio_path, question, choices,
                     max_rounds=5, max_new_tokens_per_round=128,
                     temperature=0.7, sample_rate=SAMPLE_RATE, tmp_dir="output/interleaved_tmp"):
-    """执行 audio-interleaved 推理。"""
+    """执行 audio-interleaved 推理（Echo 机制）。
+
+    每轮生成时通过 SegStoppingCriteria 在第一个完整 </seg> 处立即暂停：
+    1. 解析 <seg>start, end</seg>（不论是否在 <think> 内部）
+    2. 从原始音频裁剪对应片段
+    3. 将裁剪的音频插入下一轮上下文中
+    4. 继续生成直到出现 </answer> 或达到 max_rounds
+    """
     # 加载完整音频
     audio_full, sr = librosa.load(audio_path, sr=sample_rate)
     duration = librosa.get_duration(path=audio_path)
@@ -134,18 +173,13 @@ def run_interleaved(model, processor, audio_path, question, choices,
     all_generated_text = ""
     used_segments = []  # [{"round": ..., "start": ..., "end": ..., "segment_path": ...}]
     round_outputs = []  # 每轮完整生成文本
+    round_debug = []    # 每轮 debug 信息
     parse_errors = []
-    seg_count = 0  # 已处理的 seg 数量
-
-    # 存储所有需要传入的音频（第一个永远是全量音频）
-    audio_list = [audio_full]
 
     for round_idx in range(max_rounds):
         print(f"\n=== Round {round_idx + 1}/{max_rounds} ===")
 
-        # 构造本轮对话
-        # 第一轮: user(full_audio + question)
-        # 后续轮: user(full_audio + question) + assistant(已生成文本) + user(裁剪音频 + continue)
+        # ---- 构造本轮对话 ----
         conversation = [
             {
                 "role": "user",
@@ -156,34 +190,30 @@ def run_interleaved(model, processor, audio_path, question, choices,
             }
         ]
 
-        # 如果有历史文本，添加到对话中
+        # assistant 历史
         if all_generated_text.strip():
             conversation.append({
                 "role": "assistant",
                 "content": all_generated_text.strip(),
             })
 
-        # 如果有已裁剪的音频片段，作为新 user 消息插入
-        for idx, seg_info in enumerate(used_segments):
-            seg_audio, _ = librosa.load(seg_info["segment_path"], sr=sample_rate)
-            audio_list.append(seg_audio)
+        # 最新一个裁剪音频片段 + 继续推理 prompt
+        if used_segments:
+            last_seg = used_segments[-1]
+            seg_audio, _ = librosa.load(last_seg["segment_path"], sr=sample_rate)
+            conversation.append({
+                "role": "user",
+                "content": [
+                    {"type": "audio", "audio": seg_audio},
+                    {"type": "text", "text": build_continue_prompt()},
+                ],
+            })
 
-            if idx == len(used_segments) - 1 and round_idx > 0:
-                # 最后一个片段 + 继续推理 prompt
-                conversation.append({
-                    "role": "user",
-                    "content": [
-                        {"type": "audio", "audio": seg_audio},
-                        {"type": "text", "text": build_continue_prompt()},
-                    ],
-                })
-
-        # ---- 生成 ----
+        # ---- 编码 ----
         text = processor.apply_chat_template(
             conversation, add_generation_prompt=True, tokenize=False
         )
 
-        # 提取所有 audio 数组给 processor
         all_audios = []
         for msg in conversation:
             content = msg.get("content", [])
@@ -191,6 +221,8 @@ def run_interleaved(model, processor, audio_path, question, choices,
                 for item in content:
                     if item.get("type") == "audio" and "audio" in item:
                         all_audios.append(item["audio"])
+
+        num_audios_before = len(all_audios)
 
         if len(all_audios) == 1:
             inputs = processor(
@@ -203,10 +235,15 @@ def run_interleaved(model, processor, audio_path, question, choices,
 
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
+        # ---- 使用 SegStoppingCriteria 生成 ----
+        prompt_length = inputs["input_ids"].shape[1]
+        seg_stop = SegStoppingCriteria(processor.tokenizer, prompt_length)
+
         gen_kwargs = {
             "max_new_tokens": max_new_tokens_per_round,
             "return_audio": False,
             "speaker": None,
+            "stopping_criteria": StoppingCriteriaList([seg_stop]),
         }
         if temperature > 0:
             gen_kwargs["do_sample"] = True
@@ -217,72 +254,128 @@ def run_interleaved(model, processor, audio_path, question, choices,
         with torch.no_grad():
             generated = model.generate(**inputs, **gen_kwargs)
 
-        prompt_length = inputs["input_ids"].shape[1]
         new_tokens = generated[:, prompt_length:]
         response = processor.batch_decode(new_tokens, skip_special_tokens=True)[0].strip()
-
         round_outputs.append(response)
-        print(f"  生成: {response[:200]}...")
 
-        # 检查是否已有 answer
-        if has_answer(response):
-            # 把本轮 response 追加到总文本
-            if all_generated_text:
-                # 判断是否连续（如果 response 开头和 all_generated_text 末尾不重叠则追加）
-                all_generated_text += " " + response
+        # 判断 stop reason
+        stop_reason = seg_stop.stop_reason
+        if stop_reason is None:
+            # StoppingCriteria 没触发 → EOS 或 max_tokens
+            if has_answer(response):
+                stop_reason = "answer"
+            elif not response:
+                stop_reason = "eos"
             else:
-                all_generated_text = response
-            print(f"  检测到 </answer>，结束。")
-            break
+                stop_reason = "max_tokens"
 
-        # 提取新的 seg
-        new_segs = extract_latest_segments(response, seg_count)
-        if new_segs:
-            for s, e in new_segs:
+        print(f"  生成 ({stop_reason}): {response[:200]}...")
+
+        # 本轮 debug 信息（先填公共字段，seg 字段在下面补）
+        round_info = {
+            "round": round_idx + 1,
+            "round_stop_reason": stop_reason,
+            "detected_seg_text": None,
+            "parsed_start": None,
+            "parsed_end": None,
+            "clipped_segment_path": None,
+            "clipped_segment_duration": None,
+            "insert_success": False,
+            "num_audios_before": num_audios_before,
+            "num_audios_after": num_audios_before,
+            "inserted_audio_paths": None,
+            "continued_after_insert": False,
+            "generated_text_preview": response[:300],
+        }
+
+        # 追加到总文本
+        all_generated_text += (" " + response) if all_generated_text else response
+
+        # ============================================================
+        #  分支 1: seg 触发 → 裁剪音频 → 插入上下文 → 下一轮
+        # ============================================================
+        if stop_reason == "seg":
+            segs = parse_segments(response)
+            if segs:
+                s, e = segs[0]  # 每轮只处理第一个 seg
                 clamped = clamp_seg(s, e, duration)
-                if clamped is None:
+                if clamped is not None:
+                    start, end = clamped
+                    seg_path = save_segment_audio(
+                        audio_full, sr, start, end, tmp_dir,
+                        round_idx + 1, len(used_segments) + 1
+                    )
+                    seg_duration = end - start
+
+                    used_segments.append({
+                        "round": round_idx + 1,
+                        "start": start,
+                        "end": end,
+                        "segment_path": seg_path,
+                    })
+
+                    round_info["detected_seg_text"] = f"<seg>{s}, {e}</seg>"
+                    round_info["parsed_start"] = start
+                    round_info["parsed_end"] = end
+                    round_info["clipped_segment_path"] = seg_path
+                    round_info["clipped_segment_duration"] = round(seg_duration, 3)
+                    round_info["insert_success"] = True
+                    round_info["num_audios_after"] = num_audios_before + 1
+                    round_info["inserted_audio_paths"] = [seg_path]
+
+                    if round_idx < max_rounds - 1:
+                        round_info["continued_after_insert"] = True
+
+                    print(f"  检测到 seg: [{start:.2f}, {end:.2f}] -> {seg_path}"
+                          f"  (dur={seg_duration:.2f}s)")
+                else:
                     parse_errors.append(
-                        f"round{round_idx}: 非法 seg ({s}, {e}), duration={duration}"
+                        f"round{round_idx}: clamp failed ({s}, {e}), "
+                        f"duration={duration}"
                     )
                     print(f"  警告: seg ({s}, {e}) 超出范围，跳过")
-                    continue
-
-                start, end = clamped
-                seg_path = save_segment_audio(
-                    audio_full, sr, start, end, tmp_dir, round_idx + 1, len(used_segments) + 1
-                )
-                used_segments.append({
-                    "round": round_idx + 1,
-                    "start": start,
-                    "end": end,
-                    "segment_path": seg_path,
-                })
-                seg_count += 1
-                print(f"  检测到 seg: [{start}, {end}] -> {seg_path}")
-
-            # 更新已生成文本，下一轮继续
-            if all_generated_text:
-                all_generated_text += " " + response
+                    round_debug.append(round_info)
+                    break
             else:
-                all_generated_text = response
+                # 理论上不会发生（stop_reason=seg 但 parse 不到）
+                print(f"  警告: stop_reason=seg 但 parse_segments 返回空")
+                round_debug.append(round_info)
+                break
 
-            # 如果还有剩余轮次，下一轮继续
+            round_debug.append(round_info)
+
             if round_idx < max_rounds - 1:
                 continue
             else:
                 break
+
+        # ============================================================
+        #  分支 2: answer 触发 → 结束
+        # ============================================================
+        if stop_reason == "answer":
+            round_info["inserted_audio_paths"] = (
+                [s["segment_path"] for s in used_segments] if used_segments else []
+            )
+            round_debug.append(round_info)
+            print(f"  检测到 </answer>，结束。")
+            break
+
+        # ============================================================
+        #  分支 3: 其他（max_tokens / eos）
+        # ============================================================
+        if response:
+            print(f"  未检测到 seg 或 answer ({stop_reason})，"
+                  f"{'继续' if round_idx < max_rounds - 1 else '结束'}。")
         else:
-            # 没有新 seg 也没有 answer，但生成了文本
-            if response:
-                if all_generated_text:
-                    all_generated_text += " " + response
-                else:
-                    all_generated_text = response
-                print(f"  未检测到 seg 或 answer，但仍有生成文本。")
-            # 没有新内容输出，结束
-            if not response:
-                print(f"  空响应，结束。")
-                break
+            print(f"  空响应，结束。")
+
+        round_info["inserted_audio_paths"] = (
+            [s["segment_path"] for s in used_segments] if used_segments else []
+        )
+        round_debug.append(round_info)
+
+        if not response:
+            break
 
     # ---- 从最终文本中提取 answer ----
     final_answer = ""
@@ -301,6 +394,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
         ],
         "used_segment_paths": [seg["segment_path"] for seg in used_segments],
         "round_outputs": round_outputs,
+        "round_debug": round_debug,
         "num_rounds": len(round_outputs),
         "parse_errors": parse_errors if parse_errors else None,
     }
@@ -362,6 +456,14 @@ def main():
     print(f"  引用段数: {len(result['used_segments'])}")
     print(f"  最终答案: {result['final_answer']}")
     print(f"  解析错误: {result.get('parse_errors')}")
+    for rd in result.get('round_debug', []):
+        r = rd['round']
+        reason = rd['round_stop_reason']
+        ins = '✓' if rd['insert_success'] else '✗'
+        cont = '✓' if rd['continued_after_insert'] else '✗'
+        print(f"  Round {r}: stop={reason} insert={ins} continue={cont} "
+              f"audios={rd['num_audios_before']}->{rd['num_audios_after']} "
+              f"seg={rd['detected_seg_text'] or '—'}")
 
 
 if __name__ == "__main__":
