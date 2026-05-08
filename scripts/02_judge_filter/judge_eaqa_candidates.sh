@@ -35,7 +35,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # 解析额外参数（如 --max_samples 20）
 EXTRA_ARGS=("$@")
 
-python scripts/judge_eaqa_candidates.py \
+python scripts/02_judge_filter/judge_eaqa_candidates.py \
     --input_jsonl "$INPUT_JSONL" \
     --output_jsonl "${OUTPUT_DIR}/judged_${TIMESTAMP}.jsonl" \
     --report_json "${OUTPUT_DIR}/report_${TIMESTAMP}.json" \

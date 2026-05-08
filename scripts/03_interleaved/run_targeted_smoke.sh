@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --qos=qmultiple9
-#SBATCH -o scripts/slurm-targeted-%j.out
-#SBATCH -e scripts/slurm-targeted-%j.err
+#SBATCH -o scripts/03_interleaved/slurm-targeted-%j.out
+#SBATCH -e scripts/03_interleaved/slurm-targeted-%j.err
 
 set -e
 
@@ -31,7 +31,7 @@ echo "  Output:  $OUTPUT_DIR"
 nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv
 
 # ============ Sample 1: gap ============
-python -u scripts/interleaved_infer.py \
+python -u scripts/03_interleaved/interleaved_infer.py \
   --model_path "$BASE_MODEL" \
   --adapter_path "$ADAPTER" \
   --audio_path "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/train-00000-of-00216_9be12406/audios/--7UmfOkRbM_30000.flac" \
@@ -44,7 +44,7 @@ python -u scripts/interleaved_infer.py \
 echo "[$(date)] Sample 1/5 done"
 
 # ============ Sample 2: count_before ============
-python -u scripts/interleaved_infer.py \
+python -u scripts/03_interleaved/interleaved_infer.py \
   --model_path "$BASE_MODEL" \
   --adapter_path "$ADAPTER" \
   --audio_path "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/train-00000-of-00216_9be12406/audios/--BIwg9KRxI_130000.flac" \
@@ -57,7 +57,7 @@ python -u scripts/interleaved_infer.py \
 echo "[$(date)] Sample 2/5 done"
 
 # ============ Sample 3: repeated_event_gap ============
-python -u scripts/interleaved_infer.py \
+python -u scripts/03_interleaved/interleaved_infer.py \
   --model_path "$BASE_MODEL" \
   --adapter_path "$ADAPTER" \
   --audio_path "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/train-00000-of-00216_9be12406/audios/--CHY2qO5zc_30000.flac" \
@@ -70,7 +70,7 @@ python -u scripts/interleaved_infer.py \
 echo "[$(date)] Sample 3/5 done"
 
 # ============ Sample 4: duration_compare ============
-python -u scripts/interleaved_infer.py \
+python -u scripts/03_interleaved/interleaved_infer.py \
   --model_path "$BASE_MODEL" \
   --adapter_path "$ADAPTER" \
   --audio_path "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/train-00000-of-00216_9be12406/audios/--EnKcYsPas_210000.flac" \
@@ -83,7 +83,7 @@ python -u scripts/interleaved_infer.py \
 echo "[$(date)] Sample 4/5 done"
 
 # ============ Sample 5: gap ============
-python -u scripts/interleaved_infer.py \
+python -u scripts/03_interleaved/interleaved_infer.py \
   --model_path "$BASE_MODEL" \
   --adapter_path "$ADAPTER" \
   --audio_path "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/train-00000-of-00216_9be12406/audios/--N8Xc-3C3k_30000.flac" \

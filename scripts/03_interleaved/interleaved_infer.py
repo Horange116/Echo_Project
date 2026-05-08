@@ -321,7 +321,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
                     round_info["clipped_segment_duration"] = round(seg_duration, 3)
                     round_info["insert_success"] = True
                     round_info["num_audios_after"] = num_audios_before + 1
-                    round_info["inserted_audio_paths"] = [seg_path]
+                    round_info["inserted_audio_paths"] = [s["segment_path"] for s in used_segments]
 
                     if round_idx < max_rounds - 1:
                         round_info["continued_after_insert"] = True
@@ -333,14 +333,26 @@ def run_interleaved(model, processor, audio_path, question, choices,
                         f"round{round_idx}: clamp failed ({s}, {e}), "
                         f"duration={duration}"
                     )
-                    print(f"  警告: seg ({s}, {e}) 超出范围，跳过")
+                    round_info["inserted_audio_paths"] = (
+                        [s["segment_path"] for s in used_segments] if used_segments else []
+                    )
                     round_debug.append(round_info)
-                    break
+                    print(f"  警告: seg ({s}, {e}) 超出范围，跳过")
+                    if round_idx < max_rounds - 1:
+                        continue
+                    else:
+                        break
             else:
                 # 理论上不会发生（stop_reason=seg 但 parse 不到）
-                print(f"  警告: stop_reason=seg 但 parse_segments 返回空")
+                round_info["inserted_audio_paths"] = (
+                    [s["segment_path"] for s in used_segments] if used_segments else []
+                )
                 round_debug.append(round_info)
-                break
+                print(f"  警告: stop_reason=seg 但 parse_segments 返回空")
+                if round_idx < max_rounds - 1:
+                    continue
+                else:
+                    break
 
             round_debug.append(round_info)
 

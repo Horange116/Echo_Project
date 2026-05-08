@@ -6,14 +6,15 @@ import traceback
 from pathlib import Path
 
 
-INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/qa_skeleton.jsonl"
-OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/eaqa_sft_local_generated_3000_12999.jsonl"
-ERROR_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/eaqa_sft_local_generated_3000_12999_errors.jsonl"
+INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/qa_skeleton.jsonl"
+OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/eaqa_sft_local_generated_13000_30903.jsonl"
+ERROR_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/eaqa_sft_local_generated_13000_30903_errors.jsonl"
 
 # DeepSeek is planned to cover skeleton indices [0, 2999].
-# This script covers [3000, 12999].
-START_INDEX = 3000
-MAX_ITEMS = 10000
+# Previous template batch covered [3000, 12999].
+# This batch covers [13000, 30903].
+START_INDEX = 13000
+MAX_ITEMS = 18000
 RANDOM_SEED = 42
 
 SEG_PATTERN = re.compile(r"<seg>\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?\s*</seg>")

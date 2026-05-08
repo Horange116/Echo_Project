@@ -9,9 +9,9 @@ from pathlib import Path
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 
 
-INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/metadata_with_qwen_audio_info.jsonl"
-OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/deepseek_qa_cot_raw.jsonl"
-ERROR_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/deepseek_qa_cot_errors.jsonl"
+INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/metadata_with_qwen_audio_info.jsonl"
+OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/deepseek_qa_cot_raw.jsonl"
+ERROR_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/deepseek_qa_cot_errors.jsonl"
 
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-HUnMwzbL0kiac1TnUkuk6BunochazpWF32mgTHM5nGDqeaoo")
 BASE_URL = "https://yinli.one/v1"

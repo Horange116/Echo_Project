@@ -9,4 +9,4 @@
 #SBATCH -o slurm-%j.out
 
 export CUDA_VISIBLE_DEVICES=4
-python "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GenerateDataToSFT/generate_sft_qwen_from_skeleton.py"
+python "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GenerateDataToSFT/generate_sft_qwen_from_skeleton.py"

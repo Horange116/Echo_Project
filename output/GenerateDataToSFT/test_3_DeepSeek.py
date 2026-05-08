@@ -5,7 +5,7 @@ import time
 from openai import OpenAI
 
 
-INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/metadata_with_qwen_audio_info.jsonl"
+INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/metadata_with_qwen_audio_info.jsonl"
 
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-HUnMwzbL0kiac1TnUkuk6BunochazpWF32mgTHM5nGDqeaoo")
 BASE_URL = "https://yinli.one/v1"

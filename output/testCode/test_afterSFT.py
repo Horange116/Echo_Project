@@ -10,9 +10,9 @@ from peft import PeftModel
 from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
 
 BASE_MODEL_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Model_Env/Qwen2.5-Omni-7B/"
-ADAPTER_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/testResult/test_SFT_10_20260426_154454/checkpoint-1"
-AUDIO_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSet/audio_72.wav"
-OUTPUT_DIR = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/testResult/test_afterSFT"
+ADAPTER_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/testResult/test_SFT_10_20260426_154454/checkpoint-1"
+AUDIO_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSet/audio_72.wav"
+OUTPUT_DIR = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/testResult/test_afterSFT"
 
 QUESTION = """How long after the man finishes speaking at approximately 4.8 seconds does the next stir event start?
 Choose the answer from ['0.2 seconds', '0.5 seconds', '0.8 seconds', '1.0 second']. Think step-by-step. Refer to the

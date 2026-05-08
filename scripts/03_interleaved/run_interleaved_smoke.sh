@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --qos=qmultiple9
-#SBATCH -o scripts/slurm-interleaved-%j.out
-#SBATCH -e scripts/slurm-interleaved-%j.err
+#SBATCH -o scripts/03_interleaved/slurm-interleaved-%j.out
+#SBATCH -e scripts/03_interleaved/slurm-interleaved-%j.err
 
 set -e
 
@@ -37,7 +37,7 @@ echo "  Output:     $OUTPUT"
 
 nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv
 
-python -u scripts/interleaved_infer.py \
+python -u scripts/03_interleaved/interleaved_infer.py \
   --model_path "$BASE_MODEL" \
   --adapter_path "$ADAPTER" \
   --audio_path "$AUDIO" \

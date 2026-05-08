@@ -16,10 +16,10 @@ from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcess
 BASE_MODEL_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Model_Env/Qwen2.5-Omni-7B/"
 
 # Change this to your newly trained checkpoint.
-ADAPTER_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/testResult/v8-20260505-175434/checkpoint-1498/"
+ADAPTER_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/testResult/v8-20260505-175434/checkpoint-1498/"
 
-EVAL_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/qa_skeleton.jsonl"
-OUTPUT_DIR = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/testResult/eval_afterSFT"
+EVAL_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/qa_skeleton.jsonl"
+OUTPUT_DIR = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/testResult/eval_afterSFT"
 
 # Training used skeleton indices 0-12999, so evaluation should start after that.
 START_INDEX = 13000

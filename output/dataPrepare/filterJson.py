@@ -5,9 +5,9 @@ from pathlib import Path
 from collections import Counter
 
 
-INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/all_summary_metadata.jsonl"
-OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/filtered_temporal_metadata.jsonl"
-REPORT_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/filter_report.json"
+INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/all_summary_metadata.jsonl"
+OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/filtered_temporal_metadata.jsonl"
+REPORT_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/filter_report.json"
 
 MIN_EVENT_DURATION = 0.05
 FULL_SPAN_TOL = 0.05

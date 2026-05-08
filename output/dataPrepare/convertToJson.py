@@ -7,9 +7,9 @@ from pathlib import Path
 import pandas as pd
 
 
-PARQUET_DIR = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSetStrong/data/"
-STRONG_TSV_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSetStrong/audioset_train_strong.tsv"
-OUTPUT_DIR = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch"
+PARQUET_DIR = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSetStrong/data/"
+STRONG_TSV_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSetStrong/audioset_train_strong.tsv"
+OUTPUT_DIR = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch"
 
 OVERWRITE = False
 

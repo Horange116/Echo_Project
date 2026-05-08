@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Batch interleaved inference — model loads once, runs N samples.
-All new protection features (duplicate detection, finalize) enabled by default.
+Batch interleaved inference smoke test.
+
+Loads model once, runs N samples from qa_skeleton.jsonl,
+and writes individual results + a summary.
 """
 
 import argparse
@@ -15,6 +17,7 @@ from interleaved_infer import load_model_and_processor, run_interleaved
 
 
 def pick_samples(skeleton_path, n, seed=None):
+    """Pick n samples from qa_skeleton.jsonl that have existing audio files."""
     import random as _random
     if seed is not None:
         _random.seed(seed)
@@ -27,6 +30,7 @@ def pick_samples(skeleton_path, n, seed=None):
                 continue
             samples.append(json.loads(line))
 
+    # Filter: audio file must exist
     valid = [s for s in samples if os.path.exists(s["audio_path"])]
     skipped = len(samples) - len(valid)
 
@@ -45,12 +49,12 @@ def pick_samples(skeleton_path, n, seed=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Batch interleaved inference")
+    parser = argparse.ArgumentParser(description="Batch interleaved inference smoke test")
     parser.add_argument("--model_path", required=True)
     parser.add_argument("--adapter_path", default=None)
     parser.add_argument("--skeleton_path", default="output/GeneratedData/qa_skeleton.jsonl")
-    parser.add_argument("--output_dir", default="output/interleaved/batch")
-    parser.add_argument("--num_samples", type=int, default=40)
+    parser.add_argument("--output_dir", default="output/interleaved")
+    parser.add_argument("--num_samples", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_rounds", type=int, default=5)
     parser.add_argument("--max_new_tokens_per_round", type=int, default=128)
@@ -61,6 +65,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.tmp_dir, exist_ok=True)
 
+    # Pick samples
     print(f"[{datetime.now()}] 选取 {args.num_samples} 个测试样本...")
     samples = pick_samples(args.skeleton_path, args.num_samples, seed=args.seed)
 
@@ -68,8 +73,9 @@ def main():
     print(f"[{datetime.now()}] 加载模型: {args.model_path}")
     t0 = time.time()
     model, processor = load_model_and_processor(args.model_path, args.adapter_path)
-    print(f"[{datetime.now()}] 模型加载完成 ({time.time()-t0:.1f}s), device: {model.device}")
+    print(f"[{datetime.now()}] 模型加载完成 (耗时 {time.time() - t0:.1f}s), device: {model.device}")
 
+    # Run batch
     all_results = []
     correct = 0
     total = len(samples)
@@ -82,8 +88,9 @@ def main():
         skeleton_id = sample.get("skeleton_id", f"sample_{i}")
 
         print(f"\n[{datetime.now()}] [{i+1}/{total}] {skeleton_id}")
-        print(f"  Q: {question[:80]}...")
+        print(f"  Q: {question}")
         print(f"  GT: {answer_gt}")
+        print(f"  Audio: {os.path.basename(audio_path)}")
 
         t1 = time.time()
         result = run_interleaved(
@@ -91,7 +98,6 @@ def main():
             audio_path=audio_path,
             question=question,
             choices=choices,
-            gold_answer=answer_gt,
             max_rounds=args.max_rounds,
             max_new_tokens_per_round=args.max_new_tokens_per_round,
             temperature=args.temperature,
@@ -99,21 +105,20 @@ def main():
         )
         elapsed = time.time() - t1
 
-        pred = result["pred_answer"]
-        is_correct = result["answer_correct"]
+        pred = result["final_answer"]
+        is_correct = (pred == answer_gt)
         if is_correct:
             correct += 1
 
         result["skeleton_id"] = skeleton_id
+        result["ground_truth"] = answer_gt
+        result["is_correct"] = is_correct
         result["elapsed_seconds"] = round(elapsed, 1)
         all_results.append(result)
 
-        trig = "✓" if result["triggered_interleaved"] else "✗"
-        corr_s = "✓" if is_correct else ("✗" if is_correct is False else "-")
-        print(f"  Pred: {pred or '-'} | {corr_s} | {result['stop_reason']} | "
-              f"rounds={result['total_rounds']} ins={result['num_inserted_segments']} "
-              f"dup={result['num_duplicate_segments']} | {elapsed:.1f}s")
+        print(f"  Pred: {pred} | GT: {answer_gt} | {'✓' if is_correct else '✗'} | {elapsed:.1f}s")
 
+    # Summary
     accuracy = correct / total * 100 if total > 0 else 0
     summary = {
         "timestamp": str(datetime.now()),
@@ -122,7 +127,6 @@ def main():
         "num_samples": total,
         "correct": correct,
         "accuracy": round(accuracy, 1),
-        "temperature": args.temperature,
         "results": all_results,
     }
 
@@ -130,24 +134,11 @@ def main():
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
-    # Print summary table
-    print(f"\n{'='*100}")
-    print(f"  Batch Summary — {total} samples, temp={args.temperature}")
-    print(f"{'='*100}")
-    print(f"{'#':4s} {'trig':6s} {'ins':5s} {'dup':5s} {'rd':4s} {'stop_reason':18s} {'ans':5s} {'corr':5s} {'pred':16s} {'gt':16s}")
-    print("-" * 85)
-    for i, r in enumerate(all_results):
-        trig_s = "✓" if r["triggered_interleaved"] else "✗"
-        ha_s = "✓" if r["has_final_answer"] else "✗"
-        corr_s = "✓" if r["answer_correct"] else ("✗" if r["answer_correct"] is False else "-")
-        print(f"{i+1:4d} {trig_s:6s} {r['num_inserted_segments']:5d} {r['num_duplicate_segments']:5d} "
-              f"{r['total_rounds']:4d} {r['stop_reason']:18s} {ha_s:5s} {corr_s:5s} "
-              f"{(r['pred_answer'] or '-'):16s} {(r['gold_answer'] or '-'):16s}")
-
-    print("-" * 85)
-    print(f"  Accuracy: {accuracy:.1f}% ({correct}/{total})")
+    print(f"\n{'='*50}")
+    print(f"  批量测试完成")
+    print(f"  总数: {total}, 正确: {correct}, 准确率: {accuracy:.1f}%")
     print(f"  结果写入: {summary_path}")
-    print(f"{'='*100}")
+    print(f"{'='*50}")
 
 
 if __name__ == "__main__":

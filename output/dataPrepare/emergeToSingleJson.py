@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 
 
-INPUT_ROOT = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/"
-OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/all_summary_metadata.jsonl"
-STATE_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/merge_state.json"
+INPUT_ROOT = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/"
+OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/all_summary_metadata.jsonl"
+STATE_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/dataPreparedRes/audioset_jsonl_batch/merge_state.json"
 
 REQUIRE_DONE_MARKER = True
 

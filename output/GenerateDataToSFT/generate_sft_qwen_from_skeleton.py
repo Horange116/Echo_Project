@@ -10,9 +10,9 @@ from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 import generate_sft_local_from_skeleton as local_gen
 
 
-INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/qa_skeleton.jsonl"
-OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/eaqa_sft_qwen_refined_1000_2999.jsonl"
-ERROR_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/output/GeneratedData/eaqa_sft_qwen_refined_1000_2999_errors.jsonl"
+INPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/qa_skeleton.jsonl"
+OUTPUT_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/eaqa_sft_qwen_refined_1000_2999.jsonl"
+ERROR_JSONL = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/eaqa_sft_qwen_refined_1000_2999_errors.jsonl"
 
 # DeepSeek covers [0, 999], Qwen refinement covers [1000, 2999],
 # local template covers [3000, 12999].

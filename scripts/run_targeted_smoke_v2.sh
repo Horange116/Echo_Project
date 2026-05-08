@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH -J batch_smoke
+#SBATCH -J targeted_v2
 #SBATCH -p A800Z
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --qos=qmultiple9
-#SBATCH -o scripts/slurm-batch-%j.out
-#SBATCH -e scripts/slurm-batch-%j.err
+#SBATCH -o scripts/slurm-targeted-v2-%j.out
+#SBATCH -e scripts/slurm-targeted-v2-%j.err
 
 set -e
 
@@ -19,29 +19,19 @@ conda activate qwen_echo
 
 BASE_MODEL="/hpai/aios3.0/private/user/s2025244189/s2025244265/Model_Env/Qwen2.5-Omni-7B"
 ADAPTER="/home/s2025244189/s2025244265/Projects/Echo_Project/output/testResult/v7-20260505-145145/checkpoint-749"
-SKELETON="output/GeneratedData/qa_skeleton.jsonl"
-OUTPUT_DIR="output/interleaved/batch_temp03_40_v2"
-NUM_SAMPLES=40
+OUTPUT_DIR="output/interleaved/targeted_v2_$(date +%Y%m%d_%H%M%S)"
 
 mkdir -p "$OUTPUT_DIR" output/interleaved_tmp
 
-echo "[$(date)] Starting batch: temp=0.3, samples=$NUM_SAMPLES"
+echo "[$(date)] Starting targeted v2 (single model load)"
 echo "  Model:   $BASE_MODEL"
 echo "  Adapter: $ADAPTER"
 echo "  Output:  $OUTPUT_DIR"
 
 nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv
 
-python -u scripts/batch_interleaved_smoke.py \
-  --model_path "$BASE_MODEL" \
-  --adapter_path "$ADAPTER" \
-  --skeleton_path "$SKELETON" \
-  --output_dir "$OUTPUT_DIR" \
-  --num_samples "$NUM_SAMPLES" \
-  --seed 42 \
-  --temperature 0.3 \
-  --max_rounds 5 \
-  --max_new_tokens_per_round 128 \
-  --tmp_dir output/interleaved_tmp
+# Model loads once inside the Python script
+python -u scripts/targeted_five.py \
+  "$BASE_MODEL" "$ADAPTER" "$OUTPUT_DIR"
 
-echo "[$(date)] Batch completed"
+echo "[$(date)] All done"

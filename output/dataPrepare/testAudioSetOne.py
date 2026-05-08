@@ -6,8 +6,8 @@ from collections import Counter, defaultdict
 import pandas as pd
 
 
-PARQUET_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSetStrong/data/train-00000-of-00216.parquet"
-STRONG_TSV_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSetStrong/audioset_train_strong.tsv"
+PARQUET_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSetStrong/data/train-00000-of-00216.parquet"
+STRONG_TSV_PATH = "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/AudioSetStrong/audioset_train_strong.tsv"
 
 
 def strong_variants(segment_id: str):

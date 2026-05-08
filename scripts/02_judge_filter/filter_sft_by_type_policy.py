@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
-Filter SFT candidate data by type policy, based on judge diagnostic results.
+Route SFT candidate data by type policy, based on judge diagnostic results.
 
-Drops low-quality types and source_group × type pairs identified by the 600-sample
-judge, while preserving the original record schema.
+Rather than permanently dropping low-quality types, this script routes them to
+needs_review_or_rewrite for future improvement, while clean samples proceed to SFT.
 
-Default policy (based on judge results):
-  - Drop start_percentage entirely              (worst: 64% QA pass)
-  - Drop deepseek_polished + overlap            (only 63.2% QA pass in polished)
-  - Keep everything else
+Routing policy (from 600-sample judge):
+  - start_percentage (64% QA pass): route to needs_review_or_rewrite
+  - deepseek_polished + overlap (63.2% QA pass): route to needs_review_or_rewrite
+  - template_or_unpolished + overlap (86.5% QA pass): keep as SFT candidate
+  - All other types: keep as SFT candidate
 
 Usage:
-  python scripts/filter_sft_by_type_policy.py \
-    --input_jsonl output/GeneratedData/eaqa_sft_generated.jsonl \
-    --output_jsonl output/judge/sft_filtered.jsonl \
+  python scripts/02_judge_filter/filter_sft_by_type_policy.py \
+    --input_jsonl output/GeneratedData/qa_skeleton.jsonl \
+    --output_sft_jsonl output/judge/sft_candidates.jsonl \
+    --output_needs_review_jsonl output/judge/needs_review.jsonl \
     --report_json output/judge/filter_report.json
 """
 
@@ -25,7 +27,6 @@ from datetime import datetime, timezone
 
 
 def get_type_from_item(item):
-    """Extract type from item, checking source_skeleton if needed."""
     for k in ("type", "qa_type", "skeleton_type"):
         v = item.get(k)
         if v:
@@ -40,7 +41,6 @@ def get_type_from_item(item):
 
 
 def build_skeleton_index_map(skeleton_path):
-    """Build skeleton_id → 0-based line index mapping from qa_skeleton.jsonl."""
     mapping = {}
     with open(skeleton_path, "r", encoding="utf-8") as f:
         for i, line in enumerate(f):
@@ -55,7 +55,6 @@ def build_skeleton_index_map(skeleton_path):
 
 
 def get_original_index(item, skeleton_map):
-    """Get original_index from item or via skeleton_id mapping."""
     idx = item.get("original_index")
     if idx is not None:
         return int(idx)
@@ -64,13 +63,10 @@ def get_original_index(item, skeleton_map):
 
 
 def resolve_source_group(original_index):
-    if original_index < 3000:
-        return "deepseek_polished"
-    return "template_or_unpolished"
+    return "deepseek_polished" if original_index < 3000 else "template_or_unpolished"
 
 
 def parse_pairs(raw):
-    """Parse 'deepseek_polished:overlap,foo:bar' into set of (source, type)."""
     if not raw:
         return set()
     pairs = set()
@@ -84,30 +80,30 @@ def parse_pairs(raw):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Filter SFT candidate data by type policy"
+        description="Route SFT candidate data by type policy"
     )
     parser.add_argument("--input_jsonl", required=True)
-    parser.add_argument("--output_jsonl", required=True)
+    parser.add_argument("--output_sft_jsonl", required=True)
+    parser.add_argument("--output_needs_review_jsonl", required=True)
     parser.add_argument("--report_json", required=True)
     parser.add_argument("--skeleton_jsonl",
                         default="output/GeneratedData/qa_skeleton.jsonl",
-                        help="qa_skeleton.jsonl for index mapping (default: "
-                             "output/GeneratedData/qa_skeleton.jsonl)")
-    parser.add_argument("--drop_types",
+                        help="qa_skeleton.jsonl for index mapping")
+    parser.add_argument("--review_types",
                         default="start_percentage",
-                        help="Comma-separated type names to drop entirely")
-    parser.add_argument("--drop_source_type_pairs",
+                        help="Types to route to needs_review (comma-separated)")
+    parser.add_argument("--review_source_type_pairs",
                         default="deepseek_polished:overlap",
-                        help="Comma-separated source:type pairs to drop")
-    parser.add_argument("--keep_types",
+                        help="Source:type pairs to route to needs_review")
+    parser.add_argument("--sft_types",
                         default="gap,duration_compare,repeated_event_gap,"
                                 "count_before,duration_percentage,order,overlap",
-                        help="Types to keep (informational)")
+                        help="Types eligible for SFT (informational)")
     args = parser.parse_args()
 
-    drop_types = {t.strip() for t in args.drop_types.split(",") if t.strip()}
-    drop_pairs = parse_pairs(args.drop_source_type_pairs)
-    keep_types = {t.strip() for t in args.keep_types.split(",") if t.strip()}
+    review_types = {t.strip() for t in args.review_types.split(",") if t.strip()}
+    review_pairs = parse_pairs(args.review_source_type_pairs)
+    sft_types = {t.strip() for t in args.sft_types.split(",") if t.strip()}
 
     # ── Build skeleton index mapping ──
     print("Building skeleton index map ...")
@@ -124,13 +120,16 @@ def main():
     total_in = len(items)
     print(f"  Input: {total_in} records")
 
-    # ── Filter ──
-    kept = []
-    dropped = []
+    # ── Route ──
+    sft_records = []
+    review_records = []
+
     before_type_counts = Counter()
     after_type_counts = Counter()
+    review_type_counts = Counter()
     before_source_type_counts = Counter()
     after_source_type_counts = Counter()
+    review_source_type_counts = Counter()
 
     for item in items:
         qa_type = get_type_from_item(item)
@@ -141,67 +140,70 @@ def main():
         before_type_counts[qa_type] += 1
         before_source_type_counts[source_type_key] += 1
 
-        # Apply drop rules
-        if qa_type in drop_types:
-            dropped.append((item, f"drop_type:{qa_type}"))
-            continue
+        # Routing logic:
+        # 1. If type is in review_types → needs_review
+        # 2. If source:type is in review_pairs → needs_review
+        # 3. Otherwise → SFT candidate
 
-        if (source_group, qa_type) in drop_pairs:
-            dropped.append((item, f"drop_pair:{source_group}:{qa_type}"))
-            continue
+        if qa_type in review_types:
+            review_records.append((item, f"review_type:{qa_type}"))
+            review_type_counts[qa_type] += 1
+            review_source_type_counts[source_type_key] += 1
+        elif (source_group, qa_type) in review_pairs:
+            review_records.append((item, f"review_pair:{source_group}:{qa_type}"))
+            review_type_counts[qa_type] += 1
+            review_source_type_counts[source_type_key] += 1
+        else:
+            sft_records.append(item)
+            after_type_counts[qa_type] += 1
+            after_source_type_counts[source_type_key] += 1
 
-        kept.append(item)
-        after_type_counts[qa_type] += 1
-        after_source_type_counts[source_type_key] += 1
-
-    # ── Write output ──
-    out_dir = os.path.dirname(args.output_jsonl)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-    with open(args.output_jsonl, "w", encoding="utf-8") as f:
-        for rec in kept:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    # ── Write outputs ──
+    for records, path in [
+        (sft_records, args.output_sft_jsonl),
+        ([r[0] for r in review_records], args.output_needs_review_jsonl),
+    ]:
+        out_dir = os.path.dirname(path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     # ── Report ──
-    # Count drop reasons
-    drop_reason_counts = Counter(reason for _, reason in dropped)
-    # Summary by drop_type / drop_pair
-    drop_type_summary = {}
-    drop_pair_summary = {}
-    for item, reason in dropped:
-        qa_type = get_type_from_item(item)
-        if reason.startswith("drop_type:"):
-            drop_type_summary[qa_type] = drop_type_summary.get(qa_type, 0) + 1
-        elif reason.startswith("drop_pair:"):
-            # reason = "drop_pair:deepseek_polished:overlap"
+    # Breakdown of review by reason
+    review_by_type = Counter()
+    review_by_pair = Counter()
+    for _, reason in review_records:
+        if reason.startswith("review_type:"):
+            t = reason.split(":", 1)[1]
+            review_by_type[t] += 1
+        elif reason.startswith("review_pair:"):
             parts = reason.split(":")
             if len(parts) >= 3:
-                src, t = parts[1], parts[2]
-                key = f"{src}/{t}"
-                drop_pair_summary[key] = drop_pair_summary.get(key, 0) + 1
+                key = f"{parts[1]}/{parts[2]}"
+                review_by_pair[key] += 1
 
     report = {
         "input": args.input_jsonl,
         "skeleton_jsonl": args.skeleton_jsonl,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "config": {
-            "drop_types": args.drop_types,
-            "drop_source_type_pairs": args.drop_source_type_pairs,
-            "keep_types": args.keep_types,
+            "review_types": args.review_types,
+            "review_source_type_pairs": args.review_source_type_pairs,
+            "sft_types": args.sft_types,
         },
         "total_input": total_in,
-        "kept": len(kept),
-        "dropped": len(dropped),
-        "dropped_by_type": drop_type_summary,
-        "dropped_by_source_type_pair": drop_pair_summary,
+        "sft_candidates": len(sft_records),
+        "needs_review": len(review_records),
+        "routed_to_review_by_type": dict(review_by_type),
+        "routed_to_review_by_source_type_pair": dict(review_by_pair),
         "before_by_type": dict(before_type_counts),
         "after_by_type": dict(after_type_counts),
-        "before_by_source_type": dict(
-            sorted(before_source_type_counts.items())
-        ),
-        "after_by_source_type": dict(
-            sorted(after_source_type_counts.items())
-        ),
+        "review_by_type": dict(review_type_counts),
+        "before_by_source_type": dict(sorted(before_source_type_counts.items())),
+        "after_by_source_type": dict(sorted(after_source_type_counts.items())),
+        "review_by_source_type": dict(sorted(review_source_type_counts.items())),
     }
 
     report_dir = os.path.dirname(args.report_json)
@@ -212,16 +214,15 @@ def main():
 
     # ── Summary ──
     print()
-    print(f"Total:  {total_in}")
-    print(f"  Kept:   {len(kept)}")
-    print(f"  Dropped by type: {sum(drop_type_summary.values())}")
-    for t, c in sorted(drop_type_summary.items()):
-        print(f"    - {t}: {c}")
-    print(f"  Dropped by source:type pair: {sum(drop_pair_summary.values())}")
-    for k, c in sorted(drop_pair_summary.items()):
-        print(f"    - {k}: {c}")
-    print(f"  Output: {args.output_jsonl}")
-    print(f"  Report: {args.report_json}")
+    print(f"Total:         {total_in}")
+    print(f"  SFT:          {len(sft_records)}")
+    print(f"  Needs review: {len(review_records)}")
+    print(f"  → by type:    {sum(review_by_type.values())}")
+    for t, c in sorted(review_by_type.items()):
+        print(f"      {t}: {c}")
+    print(f"  → by pair:    {sum(review_by_pair.values())}")
+    for k, c in sorted(review_by_pair.items()):
+        print(f"      {k}: {c}")
 
 
 if __name__ == "__main__":
