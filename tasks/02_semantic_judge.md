@@ -221,3 +221,66 @@ python scripts/judge_eaqa_candidates.py \
 - `judge_base_url_host` 只记录 hostname
 - 错误日志不包含 Authorization header
 - output_jsonl / report_json 不保存 key
+
+## 执行结果
+
+日期: 2026-05-08
+
+对 600 条分层抽样数据（deepseek_polished 301 条 + template_or_unpolished 299 条）进行 DeepSeek-R1 judge，结果如下。
+
+### 整体分布
+
+| 分流 | 数量 | 占比 |
+|------|------|------|
+| SFT (both valid) | 498 | 83.0% |
+| RL (QA=Y, COT=N) | 44 | 7.3% |
+| 丢弃 (QA=N) | 58 | 9.7% |
+
+### 按来源段
+
+| source_group | total | QA=Y | QA=N | QA pass | COT=Y | COT=N |
+|-------------|------|------|------|---------|------|------|
+| deepseek_polished | 301 | 264 | 37 | 87.7% | 235 | 66 |
+| template_or_unpolished | 299 | 278 | 21 | 93.0% | 266 | 33 |
+
+### 按题型
+
+| qa_type | total | QA=Y | QA=N | QA pass | COT=Y | COT=N |
+|---------|------|------|------|---------|------|------|
+| gap | 76 | 76 | 0 | 100.0% | 76 | 0 |
+| duration_compare | 74 | 74 | 0 | 100.0% | 73 | 1 |
+| repeated_event_gap | 76 | 76 | 0 | 100.0% | 75 | 1 |
+| count_before | 75 | 74 | 1 | 98.7% | 65 | 10 |
+| duration_percentage | 75 | 73 | 2 | 97.3% | 61 | 14 |
+| order | 74 | 65 | 9 | 87.8% | 62 | 12 |
+| overlap | 75 | 56 | 19 | 74.7% | 52 | 23 |
+| start_percentage | 75 | 48 | 27 | 64.0% | 37 | 38 |
+
+### 按来源段 × 题型
+
+| source / qa_type | total | QA=Y | QA=N | QA pass |
+|-----------------|------|------|------|---------|
+| deepseek_polished/count_before | 37 | 37 | 0 | 100.0% |
+| deepseek_polished/duration_compare | 37 | 37 | 0 | 100.0% |
+| deepseek_polished/duration_percentage | 38 | 36 | 2 | 94.7% |
+| deepseek_polished/gap | 38 | 38 | 0 | 100.0% |
+| deepseek_polished/order | 37 | 33 | 4 | 89.2% |
+| deepseek_polished/overlap | 38 | 24 | 14 | 63.2% |
+| deepseek_polished/repeated_event_gap | 38 | 38 | 0 | 100.0% |
+| deepseek_polished/start_percentage | 38 | 21 | 17 | 55.3% |
+| template_or_unpolished/count_before | 38 | 37 | 1 | 97.4% |
+| template_or_unpolished/duration_compare | 37 | 37 | 0 | 100.0% |
+| template_or_unpolished/duration_percentage | 37 | 37 | 0 | 100.0% |
+| template_or_unpolished/gap | 38 | 38 | 0 | 100.0% |
+| template_or_unpolished/order | 37 | 32 | 5 | 86.5% |
+| template_or_unpolished/overlap | 37 | 32 | 5 | 86.5% |
+| template_or_unpolished/repeated_event_gap | 38 | 38 | 0 | 100.0% |
+| template_or_unpolished/start_percentage | 37 | 27 | 10 | 73.0% |
+
+### 洞察
+
+- gap / duration_compare / repeated_event_gap 三类两类数据均接近 100%，质量稳定
+- start_percentage 整体最差（64%），DeepSeek 润色段仅 55.3%，模板段 73.0%
+- overlap 模板段 86.5% 尚可，但 DeepSeek 润色段仅 63.2%
+- 模板段整体优于 DeepSeek 润色段（93.0% vs 87.7%）
+- 零 API 错误 / 解析错误

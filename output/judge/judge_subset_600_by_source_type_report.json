@@ -1,0 +1,53 @@
+{
+  "input_jsonl": "output/judge/candidates_merged_full.jsonl",
+  "polished_range": "0:3000",
+  "config": {
+    "polished_per_type": 38,
+    "template_per_type": 38,
+    "max_total": 600,
+    "seed": 42,
+    "type_field_candidates": "type,qa_type,skeleton_type"
+  },
+  "total_input": 13000,
+  "total_selected": 600,
+  "selected_by_source_group": {
+    "deepseek_polished": 301,
+    "template_or_unpolished": 299
+  },
+  "selected_by_source_group_and_type": {
+    "deepseek_polished/order": 37,
+    "deepseek_polished/overlap": 38,
+    "template_or_unpolished/gap": 38,
+    "deepseek_polished/duration_compare": 37,
+    "template_or_unpolished/start_percentage": 37,
+    "template_or_unpolished/count_before": 38,
+    "deepseek_polished/repeated_event_gap": 38,
+    "template_or_unpolished/duration_compare": 37,
+    "deepseek_polished/gap": 38,
+    "template_or_unpolished/order": 37,
+    "template_or_unpolished/overlap": 37,
+    "template_or_unpolished/repeated_event_gap": 38,
+    "deepseek_polished/start_percentage": 38,
+    "deepseek_polished/duration_percentage": 38,
+    "template_or_unpolished/duration_percentage": 37,
+    "deepseek_polished/count_before": 37
+  },
+  "available_by_source_group_and_type": {
+    "deepseek_polished/overlap": 479,
+    "deepseek_polished/gap": 482,
+    "deepseek_polished/count_before": 363,
+    "deepseek_polished/duration_percentage": 480,
+    "deepseek_polished/repeated_event_gap": 301,
+    "deepseek_polished/order": 121,
+    "deepseek_polished/duration_compare": 241,
+    "deepseek_polished/start_percentage": 533,
+    "template_or_unpolished/start_percentage": 1800,
+    "template_or_unpolished/overlap": 1600,
+    "template_or_unpolished/gap": 1600,
+    "template_or_unpolished/duration_percentage": 1600,
+    "template_or_unpolished/count_before": 1200,
+    "template_or_unpolished/duration_compare": 800,
+    "template_or_unpolished/repeated_event_gap": 1000,
+    "template_or_unpolished/order": 400
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "input_jsonl": "output/judge/judge_subset_600_by_source_type.jsonl",
+  "output_jsonl": "output/judge/judged_subset_600_by_source_type.jsonl",
+  "judge_config": {
+    "base_url_host": "yinli.one",
+    "model": "deepseek-reasoner",
+    "temperature": 0.0,
+    "max_tokens": 128,
+    "max_retries": 3,
+    "sleep_seconds": 0.2,
+    "concurrency": 12,
+    "qps_limit": 0.0,
+    "resume": false,
+    "retry_failed": false
+  },
+  "timestamp": "2026-05-08T03:51:09.868658+00:00",
+  "total_input": 600,
+  "processed": 600,
+  "skipped_existing": 0,
+  "api_errors": 0,
+  "parse_errors": 0,
+  "qa_valid_yes": 542,
+  "qa_valid_no": 58,
+  "cot_valid_yes": 501,
+  "cot_valid_no": 99,
+  "both_valid": 498,
+  "qa_valid_yes_cot_no": 44,
+  "qa_invalid": 58,
+  "by_type_stats": {
+    "count_before": {
+      "qa_valid_yes": 74,
+      "cot_valid_yes": 65,
+      "both_valid": 65,
+      "cot_valid_no": 10,
+      "qa_valid_yes_cot_no": 9,
+      "qa_valid_no": 1
+    },
+    "duration_compare": {
+      "qa_valid_yes": 74,
+      "cot_valid_yes": 73,
+      "both_valid": 73,
+      "cot_valid_no": 1,
+      "qa_valid_yes_cot_no": 1
+    },
+    "duration_percentage": {
+      "qa_valid_yes": 73,
+      "cot_valid_yes": 61,
+      "both_valid": 61,
+      "cot_valid_no": 14,
+      "qa_valid_yes_cot_no": 12,
+      "qa_valid_no": 2
+    },
+    "gap": {
+      "qa_valid_yes": 76,
+      "cot_valid_yes": 76,
+      "both_valid": 76
+    },
+    "order": {
+      "qa_valid_yes": 65,
+      "cot_valid_yes": 62,
+      "both_valid": 62,
+      "cot_valid_no": 12,
+      "qa_valid_yes_cot_no": 3,
+      "qa_valid_no": 9
+    },
+    "overlap": {
+      "qa_valid_yes": 56,
+      "cot_valid_yes": 52,
+      "both_valid": 50,
+      "qa_valid_no": 19,
+      "cot_valid_no": 23,
+      "qa_valid_yes_cot_no": 6
+    },
+    "repeated_event_gap": {
+      "qa_valid_yes": 76,
+      "cot_valid_yes": 75,
+      "both_valid": 75,
+      "cot_valid_no": 1,
+      "qa_valid_yes_cot_no": 1
+    },
+    "start_percentage": {
+      "qa_valid_no": 27,
+      "cot_valid_no": 38,
+      "qa_valid_yes": 48,
+      "qa_valid_yes_cot_no": 12,
+      "cot_valid_yes": 37,
+      "both_valid": 36
+    }
+  }
+}

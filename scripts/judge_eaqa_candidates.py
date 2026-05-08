@@ -410,7 +410,7 @@ def main():
     # ── 统计（在所有分支前初始化） ──
     stats = Counter()
     by_type_stats = {}
-    stats_lock = threading.Lock()
+    stats_lock = threading.RLock()
     skip_count = total - len(todo)
 
     def _inc_type(t, key):

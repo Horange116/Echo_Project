@@ -9,7 +9,7 @@ set -e
 BASE_URL="https://yinli.one/v1"
 MODEL="deepseek-reasoner"
 # API Key — 填在这里则自动 export，不填则读取环境变量 ECHO_JUDGE_API_KEY
-API_KEY=""
+API_KEY="sk-HUnMwzbL0kiac1TnUkuk6BunochazpWF32mgTHM5nGDqeaoo"
 API_KEY_ENV="ECHO_JUDGE_API_KEY"
 
 # 输入输出路径

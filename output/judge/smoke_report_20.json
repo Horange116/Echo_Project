@@ -1,0 +1,81 @@
+{
+  "input_jsonl": "/tmp/merged_20.jsonl",
+  "output_jsonl": "output/judge/smoke_judged_20.jsonl",
+  "judge_config": {
+    "base_url_host": "yinli.one",
+    "model": "deepseek-reasoner",
+    "temperature": 0.0,
+    "max_tokens": 128,
+    "max_retries": 3,
+    "sleep_seconds": 0.5,
+    "resume": true,
+    "retry_failed": false
+  },
+  "timestamp": "2026-05-07T16:55:31.612217+00:00",
+  "total_input": 20,
+  "processed": 20,
+  "skipped_existing": 0,
+  "api_errors": 0,
+  "parse_errors": 0,
+  "qa_valid_yes": 16,
+  "qa_valid_no": 4,
+  "cot_valid_yes": 16,
+  "cot_valid_no": 4,
+  "both_valid": 16,
+  "qa_valid_yes_cot_no": 0,
+  "qa_invalid": 4,
+  "by_type_stats": {
+    "count_before": {
+      "processed": 3,
+      "qa_valid_yes": 3,
+      "cot_valid_yes": 3,
+      "both_valid": 3
+    },
+    "duration_compare": {
+      "processed": 2,
+      "qa_valid_yes": 2,
+      "cot_valid_yes": 2,
+      "both_valid": 2
+    },
+    "duration_percentage": {
+      "processed": 2,
+      "qa_valid_yes": 2,
+      "cot_valid_yes": 2,
+      "both_valid": 2
+    },
+    "gap": {
+      "processed": 4,
+      "qa_valid_yes": 4,
+      "cot_valid_yes": 4,
+      "both_valid": 4
+    },
+    "order": {
+      "processed": 1,
+      "qa_valid_yes": 1,
+      "cot_valid_yes": 1,
+      "both_valid": 1
+    },
+    "overlap": {
+      "processed": 4,
+      "qa_valid_no": 3,
+      "cot_valid_no": 3,
+      "qa_valid_yes": 1,
+      "cot_valid_yes": 1,
+      "both_valid": 1
+    },
+    "repeated_event_gap": {
+      "processed": 2,
+      "qa_valid_yes": 2,
+      "cot_valid_yes": 2,
+      "both_valid": 2
+    },
+    "start_percentage": {
+      "processed": 2,
+      "qa_valid_no": 1,
+      "cot_valid_no": 1,
+      "qa_valid_yes": 1,
+      "cot_valid_yes": 1,
+      "both_valid": 1
+    }
+  }
+}
