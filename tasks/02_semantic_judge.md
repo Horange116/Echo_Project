@@ -354,5 +354,37 @@ output/GeneratedData/
 
 | 版本 | 数据 | 状态 | 目标 |
 |------|------|------|------|
-| **v9a-format-clean** | 24K 原始 CoT | job 41637 训练中 | 验证格式收敛效果 |
-| **v9b-diverse-cot** | 增强多样化后的 CoT | 另一个窗口进行中 | 接近论文 cold-start model |
+| **v9a-format-clean** | 24K 原始 CoT | **已完成** (job 41637, 2h28m) | 验证格式收敛效果 |
+| **v9b-diverse-cot** | 增强多样化后的 CoT | **训练中** (job 41641) | 接近论文 cold-start model |
+
+### v9a-format-clean 评估结果 (500 samples)
+
+| 指标 | v7 (12K) | v8 (12K×2epoch) | **v9a (24K)** |
+|------|----------|----------------|---------------|
+| has_seg | 60.0% | 27.4% | **39.4%** |
+| fully_structured | 60.0% | 27.4% | **39.4%** |
+| answer_in_choices | 96.0% | 98.0% | **87.0%** |
+| answer_acc | 30.0% | 44.6% | **42.0%** |
+
+按题型：
+
+| type | n | seg | correct | 说明 |
+|------|---|-----|---------|------|
+| count_before | 52 | **98%** | 58% | seg 输出稳定，准确率中等 |
+| order | 31 | **84%** | **94%** | 双高，简单题型 |
+| repeated_event_gap | 48 | 85% | 35% | 有 seg 但答案不准 |
+| duration_compare | 43 | 60% | 74% | 中等偏上 |
+| overlap | 85 | 36% | 27% | 需要多段比较，弱项 |
+| start_percentage | 89 | 17% | 24% | 模板缺陷暴露 |
+| gap | 78 | 9% | 35% | 几乎不用 seg |
+| duration_percentage | 74 | **0%** | 42% | 完全不用 seg |
+
+**结论**：
+- 24K → seg 率 39.4%，介于 v7(60%) 和 v8(27%) 之间，未突破
+- answer_acc 42% 接近 v8(44.6%)，略好于 v7(30%)
+- answer_in_choices 87.0% 低于 v7/v8，模型倾向自由文本
+- duration_percentage 0% seg、gap 仅 9% — 某些题型模型主动放弃 seg 输出
+- 与论文 EAQA-SFT 差距：缺少"引用前理由+引用后分析"的自然推理
+
+评估报告：`output/eval_results/v9a_format_clean_eval_500/eval_report.json`
+预测详情：`output/eval_results/v9a_format_clean_eval_500/predictions.jsonl`
