@@ -333,3 +333,26 @@ output/GeneratedData/
 - `output/GenerateDataToSFT/generate_sft_local_from_skeleton.py` — 模板 CoT 生成（原型）
 - `scripts/02_judge_filter/stats_sft_candidates.py` — 质量统计
 - `output/judge/sft_candidate_stats_final.json` — 最终报告
+
+---
+
+## 训练进度
+
+### 24K Clean CoT 的问题
+
+24K 模板生成的 CoT 虽然格式 100% 达标，但多样性与论文 EAQA-SFT 差距明显：
+
+| 指标 | 当前 24K | 论文 EAQA-SFT |
+|------|----------|---------------|
+| 平均 CoT 长度 | 39.3 words | 87.5 words |
+| 模板重复率 | 54.4% | - |
+| seg 前后有分析 | 1.0% | saturated |
+
+核心问题：模板生成是机械填空（`<seg>a,b</seg> contains X and ends at ...`），缺乏"为什么引用这一段""排除其他选项"的自然推理。
+
+### 两路并行
+
+| 版本 | 数据 | 状态 | 目标 |
+|------|------|------|------|
+| **v9a-format-clean** | 24K 原始 CoT | job 41637 训练中 | 验证格式收敛效果 |
+| **v9b-diverse-cot** | 增强多样化后的 CoT | 另一个窗口进行中 | 接近论文 cold-start model |
