@@ -284,3 +284,52 @@ python scripts/judge_eaqa_candidates.py \
 - overlap 模板段 86.5% 尚可，但 DeepSeek 润色段仅 63.2%
 - 模板段整体优于 DeepSeek 润色段（93.0% vs 87.7%）
 - 零 API 错误 / 解析错误
+
+---
+
+## CoT 生成进度
+
+日期: 2026-05-08
+
+全部 30,904 条骨架（qa_skeleton.jsonl）已完成 CoT 生成。SFT 候选 24,861 条覆盖率达到 100%。
+
+### 生成批次
+
+| 来源 | 索引范围 | 数量 | 质量 |
+|------|----------|------|------|
+| DeepSeek-R1 API | 0-2999 | 3,210 | 100% |
+| 模板生成 | 3000-12999 | 7,904 | 100% |
+| 模板生成 | 13000-30903 | 17,904 | 100% |
+| 模板补缺 | 0-2999 中遗漏 | 39 | 100% |
+| **总计** | **0-30903** | **29,057** | |
+
+### 输出文件
+
+```
+output/GeneratedData/
+├── eaqa_sft_generated.jsonl                       # DeepSeek: 3,210
+├── eaqa_sft_local_generated_3000_12999.jsonl      # 模板: 7,904
+├── eaqa_sft_local_generated_13000_30903.jsonl     # 模板: 17,904
+├── eaqa_sft_local_generated_remaining_39.jsonl    # 模板补缺: 39
+└── qa_skeleton.jsonl                              # 原始骨架: 30,904
+```
+
+### SFT 候选质量统计（最终）
+
+| 指标 | 值 |
+|------|-----|
+| SFT 候选数 | 24,861 |
+| CoT 覆盖率 | **100%** |
+| has_think_answer | 100% |
+| has_seg | 100% |
+| fully_structured | 100% |
+| answer_in_choices | 100% |
+| 平均 CoT 长度 | 296 chars |
+| 平均 seg/样本 | 1.9 |
+| 无效时间戳 | 0 |
+
+### 相关脚本
+
+- `output/GenerateDataToSFT/generate_sft_local_from_skeleton.py` — 模板 CoT 生成（原型）
+- `scripts/02_judge_filter/stats_sft_candidates.py` — 质量统计
+- `output/judge/sft_candidate_stats_final.json` — 最终报告
