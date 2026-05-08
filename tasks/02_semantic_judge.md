@@ -355,16 +355,17 @@ output/GeneratedData/
 | 版本 | 数据 | 状态 | 目标 |
 |------|------|------|------|
 | **v9a-format-clean** | 24K 原始 CoT | **已完成** (job 41637, 2h28m) | 验证格式收敛效果 |
-| **v9b-diverse-cot** | 增强多样化后的 CoT | **训练中** (job 41641) | 接近论文 cold-start model |
+| **v9b-diverse-cot** | 增强多样化后的 CoT (24K diverse) | **训练完成** (job 41641, 3h) | 接近论文 cold-start model |
+| **v9b-eval** | manifest_500 评估 | **运行中** (job 41667) | v9b 性能验证 |
 
 ### v9a-format-clean 评估结果 (500 samples)
 
-| 指标 | v7 (12K) | v8 (12K×2epoch) | **v9a (24K)** |
-|------|----------|----------------|---------------|
-| has_seg | 60.0% | 27.4% | **39.4%** |
-| fully_structured | 60.0% | 27.4% | **39.4%** |
-| answer_in_choices | 96.0% | 98.0% | **87.0%** |
-| answer_acc | 30.0% | 44.6% | **42.0%** |
+| 指标 | v7 (12K) | v8 (12K×2epoch) | **v9a (24K)** | **v9b (24K diverse)** |
+|------|----------|----------------|---------------|----------------------|
+| has_seg | 60.0% | 27.4% | **39.4%** | ⏳ 评估中 (job 41667) |
+| fully_structured | 60.0% | 27.4% | **39.4%** | ⏳ |
+| answer_in_choices | 96.0% | 98.0% | **87.0%** | ⏳ |
+| answer_acc | 30.0% | 44.6% | **42.0%** | ⏳ |
 
 按题型：
 
@@ -388,3 +389,14 @@ output/GeneratedData/
 
 评估报告：`output/eval_results/v9a_format_clean_eval_500/eval_report.json`
 预测详情：`output/eval_results/v9a_format_clean_eval_500/predictions.jsonl`
+
+### v9b-diverse-cot 训练信息
+
+| 项目 | 内容 |
+|------|------|
+| 训练 job | 41641 (COMPLETED, 3h) |
+| 训练数据 | `eaqa_sft_v9_clean_diverse_cot.jsonl` (24,861 条增强 CoT) |
+| 最终 checkpoint | `output/testResult/v9b-clean-diverse-cot-20260508-212134/v0-20260508-212211/checkpoint-1539` |
+| 最终 loss | 0.42 (train), 0.38 (eval) |
+| token_acc | 0.86 |
+| 评估 job | 41667 (运行中) |
