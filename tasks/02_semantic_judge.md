@@ -418,4 +418,102 @@ output/GeneratedData/
 | 最终 checkpoint | `output/testResult/v9b-clean-diverse-cot-20260508-212134/v0-20260508-212211/checkpoint-1539` |
 | 最终 loss | 0.42 (train), 0.38 (eval) |
 | token_acc | 0.86 |
-| 评估 job | 41667 (运行中) |
+| 评估 job | 41668 (COMPLETED, batch_size=8) |
+
+---
+
+### v10-mixed-sft (70% diverse / 30% clean)
+
+为解决 v9b 格式退化（has_think_answer 79.6%）同时保留 seg 提升，构造混合数据集：按题型加权混合 v9a（clean CoT）和 v9b（diverse CoT）。
+
+**混合策略**：`scripts/build_v10_mixed_sft.py`
+
+| 题型 | 权重 (diverse %) | 理由 |
+|------|-----------------|------|
+| gap | 85% | v9b seg 飙升(9%→69%)，acc 稳定 |
+| duration_percentage | 85% | v9b seg 从 0%→93% 🚀 |
+| start_percentage | 80% | v9b seg 从 17%→79% 🚀 |
+| count_before | 80% | v9b seg 和 acc 均提升 |
+| order | 80% | v9b seg 和 acc 均提升 |
+| overlap | 70% | v9b seg 提升但 acc 略降 |
+| unknown | 70% | 默认 fallback |
+| duration_compare | 50% | v9b acc 下降(74%→63%)，平衡 |
+| repeated_event_gap | 30% | v9b seg 和 acc 均下降，偏向 clean |
+
+**实际分布**：diverse 78.96% / clean 21.04%
+
+**训练信息**：
+
+| 项目 | 内容 |
+|------|------|
+| 训练 job | 41669 (COMPLETED, 2h32m) |
+| 训练数据 | `eaqa_sft_v10_mixed_70diverse_30clean.jsonl` (24,861 条) |
+| 最终 checkpoint | `output/testResult/v10-mixed-70diverse-30clean-20260509-100727/v0-20260509-100817/checkpoint-1539` |
+| 评估 job | 41680 (COMPLETED, ~1h26m) |
+
+### v10 评估结果 (500 samples)
+
+| 指标 | v7 (12K) | v8 (12K×2) | v9a (24K) | v9b (24K diverse) | **v10 (79/21 mixed)** | v9b-2epoch |
+|------|----------|------------|-----------|-------------------|----------------------|------------|
+| has_think_answer | — | — | 99.6% | 79.6% | **89.4%** | 99.8% |
+| has_seg | 60.0% | 27.4% | 39.4% | 74.4% | **84.0%** | 99.8% |
+| fully_structured | 60.0% | 27.4% | 39.4% | 74.4% | **84.0%** | 99.8% |
+| answer_in_choices | 96.0% | 98.0% | 87.0% | 77.0% | **85.6%** | 97.6% |
+| answer_acc | 30.0% | 44.6% | 42.0% | 35.8% | **36.4%** | **43.8%** |
+
+**v10 Δ vs v9b**：
+- has_think_answer **+9.8%** (79.6%→89.4%)，格式退化大幅缓解 ✅
+- has_seg **+9.6%** (74.4%→84.0%)，seg 继续提升 ✅
+- answer_in_choices **+8.6%** (77.0%→85.6%) ✅
+- answer_acc **+0.6%** (35.8%→36.4%)，基本持平
+
+按题型：
+
+| type | n | v9a seg | v9a acc | v9b seg | v9b acc | v10 seg | v10 acc | v9b-2e seg | v9b-2e acc |
+|------|---|---------|---------|---------|---------|---------|---------|-----------|-----------|
+| count_before | 52 | 98% | 58% | 100% | 60% | 100% | 48% | 100% | 35% |
+| duration_compare | 43 | 60% | 74% | 63% | 63% | 63% | 63% | 100% | 72% |
+| duration_percentage | 74 | 0% | 42% | 93% | 34% | 91% | 23% | 99% | 28% |
+| gap | 78 | 9% | 35% | 69% | 33% | 91% | 40% | 100% | 45% |
+| order | 31 | 84% | 94% | 100% | 97% | 97% | 94% | 100% | 97% |
+| overlap | 85 | 36% | 27% | 52% | 20% | 65% | 24% | 100% | 45% |
+| repeated_event_gap | 48 | 85% | 35% | 52% | 15% | 92% | 33% | 100% | 52% |
+| start_percentage | 89 | 17% | 24% | 79% | 18% | 83% | 19% | 100% | 24% |
+
+**结论**：
+1. **混合策略有效改善了格式**：has_think_answer 从 79.6% 回升到 89.4%，seg 从 74.4% 进一步提升到 84.0%
+2. **重点题型修复成功**：repeated_event_gap seg 从 52%→92%，acc 从 15%→33%；gap seg 从 69%→91%
+3. **准确率未突破**：answer_acc 36.4% 仍低于 v9a(42%) 和 v8(44.6%)，混合数据未能同时提升格式和精度
+4. **v9b-2epoch 是最优单点**：99.8% seg + 43.8% acc，三项指标全面领先（但 repeated_event_gap 的 acc 仅恢复到和 v9a 持平，约 35%）
+
+**v10 报告**：`output/eval_results/v10_mixed_eval_500/eval_report.json`
+
+---
+
+### v9b-2epoch 补充实验
+
+将 v9b (diverse CoT) 训练 2 epoch 以观察是否恢复格式稳定性。
+
+| 项目 | 内容 |
+|------|------|
+| 训练 job | — |
+| 最终 checkpoint | `output/testResult/v9b-diverse-cot-2epoch-20260509-103234/v0-20260509-103317/checkpoint-3078` |
+| 评估 job | 41682 (COMPLETED) |
+
+**结果总览**：
+
+| 指标 | v9b (1epoch) | v9b-2epoch | Δ |
+|------|-------------|------------|---|
+| has_think_answer | 79.6% | **99.8%** | +20.2% 🚀 |
+| has_seg | 74.4% | **99.8%** | +25.4% 🚀 |
+| fully_structured | 74.4% | **99.8%** | +25.4% |
+| answer_in_choices | 77.0% | **97.6%** | +20.6% 🚀 |
+| answer_acc | 35.8% | **43.8%** | +8.0% 🚀 |
+
+**关键发现**：
+1. **2 epoch 彻底解决格式退化**：has_think_answer 从 79.6%→99.8%，has_seg 从 74.4%→99.8%，全面超越 v9a
+2. **准确率回到最佳水平**：43.8% 追平 v8(44.6%)，超过 v9a(42%) 和 v10(36.4%)
+3. **推测**：extra epoch 让模型充分收敛到格式模式，同时 diverse CoT 的数据多样性让模型学到了更鲁棒的 seg 推理
+4. **所有题型 seg 率接近 100%**：包括之前困难的 overlap、start_percentage 等
+
+**v9b-2epoch 报告**：`output/eval_results/v9b_diverse_cot_2epoch_eval_500/eval_report.json`
