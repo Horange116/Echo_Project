@@ -1,0 +1,17 @@
+{
+  "model_path": "/hpai/aios3.0/private/user/s2025244189/s2025244265/Model_Env/Qwen2.5-Omni-7B/",
+  "test_jsonl": "/hpai/aios3.0/private/user/s2025244189/s2025244180/Dataset/MMAR/sft/test.jsonl",
+  "generation_config": {
+    "max_new_tokens": 64,
+    "batch_size": 8
+  },
+  "timestamp": "20260509-154624",
+  "num_samples": 1,
+  "accuracy": 0.0,
+  "correct": 0,
+  "total": 1,
+  "has_answer_tag_rate": 0.0,
+  "failed": 103,
+  "by_category": {},
+  "by_modality": {}
+}
