@@ -1,0 +1,77 @@
+{
+  "checkpoint_path": "/hpai/aios3.0/private/user/s2025244189/s2025244265/Model_Env/Qwen2.5-Omni-7B/",
+  "adapter_path": "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/testResult/v9b-diverse-cot-2epoch-20260509-103234/v0-20260509-103317/checkpoint-3078",
+  "eval_manifest_path": "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/GeneratedData/eval_manifest_500.jsonl",
+  "generation_config": {
+    "max_new_tokens": 256,
+    "batch_size": 8,
+    "sample_rate": 16000
+  },
+  "timestamp": "20260509-134822",
+  "num_samples_in_manifest": 500,
+  "stats": {
+    "processed": 500,
+    "has_think_answer": 499,
+    "has_seg": 499,
+    "fully_structured": 499,
+    "answer_in_choices": 488,
+    "answer_correct": 219
+  },
+  "rates": {
+    "has_think_answer": 0.998,
+    "has_seg": 0.998,
+    "fully_structured": 0.998,
+    "answer_in_choices": 0.976,
+    "answer_acc": 0.438
+  },
+  "type_stats": {
+    "count_before": {
+      "processed": 52,
+      "fully_structured": 52,
+      "has_seg": 52,
+      "answer_correct": 18
+    },
+    "duration_compare": {
+      "processed": 43,
+      "fully_structured": 43,
+      "has_seg": 43,
+      "answer_correct": 31
+    },
+    "duration_percentage": {
+      "processed": 74,
+      "fully_structured": 73,
+      "has_seg": 73,
+      "answer_correct": 21
+    },
+    "gap": {
+      "processed": 78,
+      "fully_structured": 78,
+      "has_seg": 78,
+      "answer_correct": 35
+    },
+    "order": {
+      "processed": 31,
+      "fully_structured": 31,
+      "has_seg": 31,
+      "answer_correct": 30
+    },
+    "overlap": {
+      "processed": 85,
+      "fully_structured": 85,
+      "has_seg": 85,
+      "answer_correct": 38
+    },
+    "repeated_event_gap": {
+      "processed": 48,
+      "fully_structured": 48,
+      "has_seg": 48,
+      "answer_correct": 25
+    },
+    "start_percentage": {
+      "processed": 89,
+      "fully_structured": 89,
+      "has_seg": 89,
+      "answer_correct": 21
+    }
+  }
+}

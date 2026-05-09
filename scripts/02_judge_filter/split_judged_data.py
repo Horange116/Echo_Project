@@ -14,6 +14,21 @@ from collections import Counter
 from datetime import datetime, timezone
 
 
+def normalize_valid_flag(x):
+    """Normalise a QA/COT valid flag from JSON bool or string to tri-state."""
+    if x is True:
+        return True
+    if x is False:
+        return False
+    if isinstance(x, str):
+        low = x.strip().lower()
+        if low in ("true", "yes", "y", "1"):
+            return True
+        if low in ("false", "no", "n", "0"):
+            return False
+    return None
+
+
 def get_type(item):
     return item.get("type") or item.get("qa_type") or item.get("skeleton_type", "unknown")
 
@@ -57,8 +72,8 @@ def main():
     source_group_type_counts = Counter()
 
     for item in items:
-        qa_valid = item.get("qa_valid")
-        cot_valid = item.get("cot_valid")
+        qa_valid = normalize_valid_flag(item.get("qa_valid"))
+        cot_valid = normalize_valid_flag(item.get("cot_valid"))
         qa_type = get_type(item)
         source_group = item.get("judge_source_group", "unknown")
 
