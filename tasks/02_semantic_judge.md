@@ -517,3 +517,82 @@ output/GeneratedData/
 4. **所有题型 seg 率接近 100%**：包括之前困难的 overlap、start_percentage 等
 
 **v9b-2epoch 报告**：`output/eval_results/v9b_diverse_cot_2epoch_eval_500/eval_report.json`
+
+---
+
+## MMAR Zero-Shot 评估：SFT 前后对比
+
+日期: 2026-05-09
+
+在 MMAR 数据集（1000 样本，4 Category × 7 Modality）上评估 Qwen2.5-Omni-7B SFT 前后的 zero-shot 表现。
+
+### 评估设置
+
+| 项目 | 内容 |
+|------|------|
+| 评估脚本 | `scripts/01_fixed_eval/eval_mmar_zero_shot.py` |
+| 数据集 | `MMAR/sft/mmar_all.jsonl`（1000 条） |
+| 音频目录 | `MMAR/mmar-audio` |
+| 生成配置 | batch_size=8, max_new_tokens=64 |
+| 模型 | Qwen2.5-Omni-7B base vs SFT (v9b-2epoch) |
+
+### 总体对比
+
+| 指标 | Base Qwen2.5-Omni | v9b-2epoch (SFT) | Δ |
+|------|-------------------|-------------------|---|
+| 总样本 | 1000 | 768 (被 cancel) | — |
+| 总体准确率 | 33.4% | 32.6% | -0.8% |
+| has_answer_tag | 70.5% | 60.2% | -10.3% 📉 |
+| 有 tag 时准确率 | 46.8% | **54.1%** | **+7.3%** ✅ |
+
+### 按 Category 对比
+
+| Category | Base | v9b-2epoch | Δ |
+|----------|------|------------|---|
+| Semantic Layer | 38.1% | 36.2% | -1.9% |
+| Signal Layer | 34.9% | 34.4% | -0.5% |
+| Cultural Layer | 31.9% | 29.6% | -2.3% |
+| Perception Layer | 29.0% | 28.7% | -0.3% |
+
+### 共同错误分析
+
+两个模型在 768 条共同样本上：
+
+- 训练后**变好**: 83 条
+- 训练后**变差**: 96 条
+- **相同**: 589 条
+
+### 关键发现
+
+**共通的格式问题 "Answer in the format of `<answer>...</answer>`"**：
+
+| 问题 | Base 模型 | SFT 模型 |
+|------|----------|---------|
+| 行为 | 输出 `<Parrot>`（尖括号包答案）而非 `<answer>Parrot</answer>` | 习惯输出完整 CoT（`<think>...<seg>...<answer>...`），64 tokens 不够用 |
+| 无 answer_tag 率 | 29.5% | 39.8% |
+| 原因 | 不擅长跟随格式指令 | CoT 推理链太长被截断，`<answer>` 标签未闭合 |
+
+**SFT 确实提升了问答能力**：
+- 当 `has_answer_tag=True` 时，准确率 **46.8% → 54.1%（+7.3%）**
+- 但 CoT 训练习惯导致更多格式失败，抵消了部分提升
+
+**示例**：
+```
+Base 输出: <Space>                    → ❌ 无 <answer> 标签
+v9b-2epoch: <answer>Space</answer>    → ✅ 正确
+
+Base 输出: To answer the phone...<answer>To answer the phone</answer>  → ✅
+v9b-2epoch: <seg>2.69,2.96</seg> is...<answer>To answer the phone</answer>  → ✅
+
+v9b-2epoch 重复循环: <seg>2.69,2.96</seg> has 0.3s...The event at...The event at...  → ❌ 截断
+```
+
+### 结论
+
+1. **SFT 后的模型确实更准确**（+7.3%），但在 zero-shot 场景下，CoT 输出习惯导致格式合规率下降
+2. **`max_new_tokens=64` 对 SFT 模型太短**：它想输出推理链再给答案，但 token 耗尽导致截断
+3. **MMAR 的零样本难度**：模型只在 EAQA 时序推理数据上训练过，MMAR 的 domain gap 明显（sound 类最差 23.6%）
+4. **如果增加 max_new_tokens 或调整 prompt**，v9b-2epoch 大概率能显著超过 base 模型
+
+**Base 报告**：`output/MMAR_eval/base_zero_shot_full/eval_report.json`
+**v9b-2epoch 报告**：（未生成完整报告，仅有 `predictions.jsonl`）
