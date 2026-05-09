@@ -356,29 +356,30 @@ output/GeneratedData/
 |------|------|------|------|
 | **v9a-format-clean** | 24K 原始 CoT | **已完成** (job 41637, 2h28m) | 验证格式收敛效果 |
 | **v9b-diverse-cot** | 增强多样化后的 CoT (24K diverse) | **训练完成** (job 41641, 3h) | 接近论文 cold-start model |
-| **v9b-eval** | manifest_500 评估 | **运行中** (job 41667) | v9b 性能验证 |
+| **v9b-eval** | manifest_500 评估 | **已完成** (job 41668, batch_size=8) | v9b 性能验证 |
 
 ### v9a-format-clean 评估结果 (500 samples)
 
 | 指标 | v7 (12K) | v8 (12K×2epoch) | **v9a (24K)** | **v9b (24K diverse)** |
 |------|----------|----------------|---------------|----------------------|
-| has_seg | 60.0% | 27.4% | **39.4%** | ⏳ 评估中 (job 41667) |
-| fully_structured | 60.0% | 27.4% | **39.4%** | ⏳ |
-| answer_in_choices | 96.0% | 98.0% | **87.0%** | ⏳ |
-| answer_acc | 30.0% | 44.6% | **42.0%** | ⏳ |
+| has_seg | 60.0% | 27.4% | **39.4%** | **74.4%** 🚀 |
+| fully_structured | 60.0% | 27.4% | **39.4%** | **74.4%** |
+| answer_in_choices | 96.0% | 98.0% | **87.0%** | **77.0%** 📉 |
+| answer_acc | 30.0% | 44.6% | **42.0%** | **35.8%** 📉 |
+| has_think_answer | - | - | 99.6% | **79.6%** 📉 |
 
-按题型：
+按题型（v9a seg / v9a correct / v9b seg / v9b correct）：
 
-| type | n | seg | correct | 说明 |
-|------|---|-----|---------|------|
-| count_before | 52 | **98%** | 58% | seg 输出稳定，准确率中等 |
-| order | 31 | **84%** | **94%** | 双高，简单题型 |
-| repeated_event_gap | 48 | 85% | 35% | 有 seg 但答案不准 |
-| duration_compare | 43 | 60% | 74% | 中等偏上 |
-| overlap | 85 | 36% | 27% | 需要多段比较，弱项 |
-| start_percentage | 89 | 17% | 24% | 模板缺陷暴露 |
-| gap | 78 | 9% | 35% | 几乎不用 seg |
-| duration_percentage | 74 | **0%** | 42% | 完全不用 seg |
+| type | n | v9a seg | v9a correct | v9b seg | v9b correct | 说明 |
+|------|---|---------|-------------|---------|-------------|------|
+| count_before | 52 | **98%** | 58% | **100%** | 60% | seg 稳定，准确率提升 |
+| order | 31 | **84%** | **94%** | **100%** | **97%** | 双高，最佳题型 |
+| duration_compare | 43 | 60% | 74% | 63% | 63% | seg 略升，acc 下降 |
+| repeated_event_gap | 48 | 85% | 35% | 52% | 15% | seg 和 acc 双降 |
+| overlap | 85 | 36% | 27% | 52% | 20% | seg 大幅提升，acc 略降 |
+| gap | 78 | 9% | 35% | 69% | 33% | seg 飙升 🚀 |
+| start_percentage | 89 | 17% | 24% | 79% | 18% | seg 飙升 🚀 |
+| duration_percentage | 74 | **0%** | 42% | 93% | 34% | seg 从 0%→93% 🚀 |
 
 **结论**：
 - 24K → seg 率 39.4%，介于 v7(60%) 和 v8(27%) 之间，未突破
@@ -387,8 +388,26 @@ output/GeneratedData/
 - duration_percentage 0% seg、gap 仅 9% — 某些题型模型主动放弃 seg 输出
 - 与论文 EAQA-SFT 差距：缺少"引用前理由+引用后分析"的自然推理
 
-评估报告：`output/eval_results/v9a_format_clean_eval_500/eval_report.json`
-预测详情：`output/eval_results/v9a_format_clean_eval_500/predictions.jsonl`
+### v9b-diverse-cot 评估结果 (500 samples)
+
+**总览**：
+
+| 指标 | v9b | Δ vs v9a |
+|------|-----|----------|
+| has_seg | **74.4%** | +35.0% 🚀 |
+| fully_structured | 74.4% | +35.0% |
+| answer_in_choices | 77.0% | -10.0% 📉 |
+| answer_acc | 35.8% | -6.2% 📉 |
+| has_think_answer | 79.6% | -20.0% 📉 |
+
+**关键发现**：
+1. **seg 率大幅提升**：74.4%，远超 v9a(39.4%) 和 v7(60%)。尤其是之前 seg 挂零的 duration_percentage 达到 93%、gap 从 9%→69%、start_percentage 从 17%→79%
+2. **格式合规下降**：has_think_answer 从 99.6% 降到 79.6%，约 20% 样本没有按 `<think>...<answer>` 格式输出
+3. **准确率下降**：answer_acc 从 42% 降到 35.8%，answer_in_choices 从 87% 降到 77%
+4. **猜测**：多样化的 CoT 让模型学到了更丰富的 seg 输出模式，但 CoT 中增加的模板噪声也可能让模型对格式和答案的收敛变差
+
+**v9a 报告**：`output/eval_results/v9a_format_clean_eval_500/eval_report.json`
+**v9b 报告**：`output/eval_results/v9b_diverse_cot_eval_500/eval_report.json`
 
 ### v9b-diverse-cot 训练信息
 
