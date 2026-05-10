@@ -30,6 +30,9 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--sample_rate", type=int, default=16000)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--continue_mode", default="prompt",
+                        choices=["prompt", "silent", "context"],
+                        help="Continue mode for seg insertion rounds")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -81,6 +84,7 @@ def main():
                 sample_rate=args.sample_rate,
                 tmp_dir=os.path.join(args.output_dir, "tmp"),
                 gold_answer=item["answer"],
+                continue_mode=args.continue_mode,
             )
             elapsed = time.time() - t_start
             result["sample_id"] = item["id"]

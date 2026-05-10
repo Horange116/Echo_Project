@@ -153,8 +153,15 @@ def load_model_and_processor(model_path, adapter_path=None):
 # ── inference helpers ──
 
 def build_conversation(prompt, all_generated_text, used_segments, audio_full,
-                       sample_rate, audio_list, round_idx, is_finalize):
-    """Build the conversation messages for the current round."""
+                       sample_rate, audio_list, round_idx, is_finalize,
+                       continue_mode="prompt"):
+    """Build the conversation messages for the current round.
+
+    continue_mode controls the follow-up user message after seg insertion:
+      "prompt"  — audio + "I have listened..." instruction (default)
+      "silent"  — pure audio, no text
+      "context" — audio + assistant's previous text (no instruction)
+    """
     conversation = [
         {
             "role": "user",
@@ -177,12 +184,21 @@ def build_conversation(prompt, all_generated_text, used_segments, audio_full,
             audio_list.append(seg_audio)
 
             if idx == len(used_segments) - 1 and round_idx > 0:
-                conversation.append({
-                    "role": "user",
-                    "content": [
+                if continue_mode == "silent":
+                    content = [{"type": "audio", "audio": seg_audio}]
+                elif continue_mode == "context":
+                    content = [
+                        {"type": "audio", "audio": seg_audio},
+                        {"type": "text", "text": all_generated_text.strip()},
+                    ]
+                else:  # "prompt"
+                    content = [
                         {"type": "audio", "audio": seg_audio},
                         {"type": "text", "text": build_continue_prompt()},
-                    ],
+                    ]
+                conversation.append({
+                    "role": "user",
+                    "content": content,
                 })
 
     return conversation
@@ -288,7 +304,8 @@ def run_interleaved(model, processor, audio_path, question, choices,
                     on_duplicate_seg="ignore_continue",
                     finalize_on_stop=True,
                     finalize_max_new_tokens=64,
-                    gold_answer=None):
+                    gold_answer=None,
+                    continue_mode="prompt"):
     """
     Run audio-interleaved inference with duplicate protection.
 
@@ -327,7 +344,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
         conversation = build_conversation(
             prompt, all_generated_text, used_segments,
             audio_full, sample_rate, audio_list, round_idx,
-            is_finalize=False
+            is_finalize=False, continue_mode=continue_mode,
         )
 
         response, round_stop_reason = run_generation(
@@ -660,6 +677,9 @@ def main():
     parser.add_argument("--finalize_on_stop", type=lambda x: x.lower() == "true", default=True)
     parser.add_argument("--finalize_max_new_tokens", type=int, default=64)
     parser.add_argument("--gold_answer", default=None)
+    parser.add_argument("--continue_mode", default="prompt",
+                        choices=["prompt", "silent", "context"],
+                        help="Continue mode for seg insertion rounds")
 
     args = parser.parse_args()
 
@@ -689,6 +709,7 @@ def main():
         finalize_on_stop=args.finalize_on_stop,
         finalize_max_new_tokens=args.finalize_max_new_tokens,
         gold_answer=args.gold_answer,
+        continue_mode=args.continue_mode,
     )
 
     os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
