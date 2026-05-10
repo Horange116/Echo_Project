@@ -251,7 +251,19 @@ def compute_grpo_loss(per_token_logps, old_per_token_logps, advantages,
 
 **KL 估计**: Schulman et al. 近似 `KL ≈ exp(log q - log p) - (log q - log p) - 1`，per-token 计算。
 
-## 9. 先不做的（后续扩展）
+## 9. 当前状态（2026-05-10）
+
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| PEFT forward 错误 | ✅ 已修复 | `merge_and_unload()` → `get_peft_model()` 导致 `_forward_unimplemented` 错误。改用直接 `PeftModel.from_pretrained(base, adapter_path, is_trainable=True)` |
+| 策略模型加载 | ✅ 成功 | 20,185,088 / 8,951,998,976 trainable params (0.23%) |
+| Reference 模型加载 | ✅ 成功 | 冻结 eval 模式，与 policy 同 checkpoint |
+| Job 41759 | ⏳ 运行中 | 1 GPU (node42, GPU 7), 80G 显存 |
+| 训练进度 | ⏳ Step 0/11 | 44 samples, batch=4, 4 rollouts/query, 1 epoch |
+| Rollout 模式 | 观察中 | 全 rollout 均为 1 unique seg → duplicate → finalize，pred=10% (start_percentage 问题) |
+| 日志 | ⏳ 持续写入 | TensorBoard + JSONL (`output/grpo_smoke/logs/`) |
+
+## 10. 先不做的（后续扩展）
 
 - ❌ vLLM 加速生成（smoke 不需要）
 - ❌ 多 GPU / DeepSpeed（1 GPU smoke）
