@@ -69,11 +69,16 @@ def build_initial_prompt(question, choices):
 
 
 def build_continue_prompt():
-    """Prompt after inserting a cropped audio segment."""
+    """Prompt after inserting a cropped audio segment.
+
+    Signals the model it is still solving the same problem and should
+    continue from where it left off, not restart.
+    """
     return (
-        "I have listened to the audio segment you referenced. "
-        "Continue your reasoning and provide the final answer. "
-        "Use <seg>start, end</seg> if you need to reference more segments."
+        "You are still solving the same problem. "
+        "You just heard the audio segment you selected. "
+        "Continue your reasoning from where you left off. "
+        "When ready, output the final answer in <answer>...</answer>."
     )
 
 
