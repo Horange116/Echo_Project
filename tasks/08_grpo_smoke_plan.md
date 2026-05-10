@@ -307,7 +307,32 @@ v9b-2epoch checkpoint 在 interleaved 推理下的 base behavior 是"找一个 s
 | `finalize_penalty` | -0.2 | 被强制终止 |
 | `round_penalty` | -0.05 | 超轮数 / 轮数不足 |
 
-## 13. 先不做的（后续扩展）
+## 13. Continue mode 三方案对比实验（2026-05-11）
+
+### 背景
+去掉 duplicate finalize 后（Job 41790），模型跑满 5 轮但 0% 准确率——模型不断重复同一个 seg，无法自然探索多 seg。核心问题是第二轮 user message 中的 continue prompt 让模型感觉是"重新开始推理"而不是"接着继续"。
+
+### 三个方案
+
+| 方案 | continue_mode | User 消息内容 | 原理 |
+|------|-------------|-------------|------|
+| silent | `silent` | `[audio]` 无文字 | 不给任何指令，让模型自然接着生成 |
+| context | `context` | `[前文CoT] [audio]` | 用模型自己的推理文本做上下文锚点，无外部指令 |
+| prompt3 | `prompt`（新文本） | `[audio] [新prompt]` | 改指令文字："You are still solving..." + "Continue from where you left off" |
+
+### 运行链
+```
+41803 (silent) → 41813 (context) → 41814 (prompt3)
+```
+串联运行，共用同一张卡。结果产出在 `output/interleaved_eval/v9b_2epoch_{silent,context,prompt3}/`。
+
+### 评估指标
+- Accuracy（最终答案正确率）
+- With answer rate（能解析出答案的比例）
+- Avg unique segs（探索的音频段数）
+- Avg rounds（用完 5 轮还是提前出答案）
+
+## 14. 先不做的（后续扩展）
 
 - ❌ vLLM 加速生成（smoke 不需要）
 - ❌ 多 GPU / DeepSpeed（1 GPU smoke）
