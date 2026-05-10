@@ -1,0 +1,79 @@
+{
+  "model_path": "/hpai/aios3.0/private/user/s2025244189/s2025244265/Model_Env/Qwen2.5-Omni-7B/",
+  "adapter_path": null,
+  "test_jsonl": "/hpai/aios3.0/private/user/s2025244189/s2025244180/Dataset/MMAR/sft/mmar_all.jsonl",
+  "generation_config": {
+    "max_new_tokens": 128,
+    "temperature": 0.7,
+    "batch_size": 8
+  },
+  "prompt_format": "simple_direct_no_cot",
+  "evaluation_metric": "MMAR_official_word_token_match",
+  "timestamp": "20260510-145031",
+  "num_samples": 1000,
+  "mmar_accuracy": 0.24,
+  "cond1_rate": 0.404,
+  "cond2_rate": 0.432,
+  "mmar_correct": 240,
+  "total": 1000,
+  "failed": 0,
+  "by_category": {
+    "Cultural Layer": {
+      "total": 141,
+      "accuracy": 0.24822695035460993,
+      "correct": 35
+    },
+    "Perception Layer": {
+      "total": 404,
+      "accuracy": 0.19306930693069307,
+      "correct": 78
+    },
+    "Semantic Layer": {
+      "total": 412,
+      "accuracy": 0.29854368932038833,
+      "correct": 123
+    },
+    "Signal Layer": {
+      "total": 43,
+      "accuracy": 0.09302325581395349,
+      "correct": 4
+    }
+  },
+  "by_modality": {
+    "mix-music-speech": {
+      "total": 82,
+      "accuracy": 0.2682926829268293,
+      "correct": 22
+    },
+    "mix-sound-music": {
+      "total": 11,
+      "accuracy": 0.2727272727272727,
+      "correct": 3
+    },
+    "mix-sound-music-speech": {
+      "total": 24,
+      "accuracy": 0.25,
+      "correct": 6
+    },
+    "mix-sound-speech": {
+      "total": 218,
+      "accuracy": 0.28440366972477066,
+      "correct": 62
+    },
+    "music": {
+      "total": 206,
+      "accuracy": 0.0970873786407767,
+      "correct": 20
+    },
+    "sound": {
+      "total": 165,
+      "accuracy": 0.19393939393939394,
+      "correct": 32
+    },
+    "speech": {
+      "total": 294,
+      "accuracy": 0.3231292517006803,
+      "correct": 95
+    }
+  }
+}

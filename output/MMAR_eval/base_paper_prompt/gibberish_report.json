@@ -1,0 +1,383 @@
+{
+  "total": 1000,
+  "gibberish_count": 209,
+  "gibberish_rate": 0.209,
+  "gibberish_by_type": {
+    "pérdida_loop(1024x)": 158,
+    "number_loop(00:79x)": 2,
+    "number_loop(00:85x)": 2,
+    "number_loop(00:32x)": 2,
+    "number_loop(00:40x)": 2,
+    "char_repeat": 2,
+    "number_loop(10:24x)": 1,
+    "number_loop(0:25x)": 1,
+    "number_loop(96:21x)": 1,
+    "number_loop(00:30x)": 1,
+    "number_loop(00:20x)": 1,
+    "number_loop(44:42x)": 1,
+    "excessive_repeat(train:106x/949w,ratio=11%)": 1,
+    "excessive_repeat(voice:66x/625w,ratio=11%)": 1,
+    "number_loop(30:25x)": 1,
+    "excessive_repeat(92:37x/477w,ratio=8%)": 1,
+    "number_loop(2:26x)": 1,
+    "number_loop(5:66x)": 1,
+    "number_loop(00:67x)": 1,
+    "excessive_repeat(oh:130x/662w,ratio=20%)": 1,
+    "dominating_word(consecutive:839/965=87%)": 1,
+    "excessive_repeat(80:78x/576w,ratio=14%)": 1,
+    "number_loop(24:20x)": 1,
+    "dominating_word(us:948/1013=94%)": 1,
+    "number_loop(0:40x)": 1,
+    "number_loop(10:42x)": 1,
+    "excessive_repeat(speaker:63x/515w,ratio=12%)": 1,
+    "excessive_repeat(sound:61x/628w,ratio=10%)": 1,
+    "number_loop(33:27x)": 1,
+    "number_loop(1:138x)": 1,
+    "number_loop(1:31x)": 1,
+    "number_loop(0:24x)": 1,
+    "excessive_repeat(84:59x/604w,ratio=10%)": 1,
+    "number_loop(0:59x)": 1,
+    "number_loop(00:82x)": 1,
+    "excessive_repeat(segment:43x/339w,ratio=13%)": 1,
+    "dominating_word(pl:855/979=87%)": 1,
+    "number_loop(00:24x)": 1,
+    "number_loop(10:33x)": 1,
+    "number_loop(0:23x)": 1,
+    "number_loop(0:41x)": 1,
+    "number_loop(15:44x)": 1,
+    "number_loop(1:24x)": 1,
+    "number_loop(1:21x)": 1,
+    "excessive_repeat(00s:30x/409w,ratio=7%)": 1,
+    "excessive_repeat(descend:58x/410w,ratio=14%)": 1,
+    "excessive_repeat(sound:190x/958w,ratio=20%)": 1
+  },
+  "gibberish_by_modality": {
+    "sound": {
+      "count": 64,
+      "total": 64,
+      "rate": 1.0
+    },
+    "speech": {
+      "count": 58,
+      "total": 58,
+      "rate": 1.0
+    },
+    "mix-sound-speech": {
+      "count": 38,
+      "total": 38,
+      "rate": 1.0
+    },
+    "music": {
+      "count": 31,
+      "total": 31,
+      "rate": 1.0
+    },
+    "mix-music-speech": {
+      "count": 11,
+      "total": 11,
+      "rate": 1.0
+    },
+    "mix-sound-music-speech": {
+      "count": 4,
+      "total": 4,
+      "rate": 1.0
+    },
+    "mix-sound-music": {
+      "count": 3,
+      "total": 3,
+      "rate": 1.0
+    }
+  },
+  "gibberish_by_category": {
+    "Perception Layer": {
+      "count": 108,
+      "total": 404,
+      "rate": 0.2673
+    },
+    "Semantic Layer": {
+      "count": 69,
+      "total": 412,
+      "rate": 0.1675
+    },
+    "Cultural Layer": {
+      "count": 22,
+      "total": 141,
+      "rate": 0.156
+    },
+    "Signal Layer": {
+      "count": 10,
+      "total": 43,
+      "rate": 0.2326
+    }
+  },
+  "audio_duration": {
+    "gibberish": {
+      "min": 3.0,
+      "mean": 11.921676136363637,
+      "max": 30.0650625,
+      "count": 209
+    },
+    "normal": {
+      "min": 6.0,
+      "mean": 22.047919958912768,
+      "max": 56.0,
+      "count": 791
+    }
+  },
+  "audio_rms": {
+    "gibberish": {
+      "min": 0.004591790027916431,
+      "mean": 0.10839450724075357,
+      "max": 0.4562869668006897,
+      "count": 209
+    },
+    "normal": {
+      "min": 0.0007060772040858865,
+      "mean": 0.10348199469310511,
+      "max": 0.5062986612319946,
+      "count": 791
+    }
+  },
+  "top20_gibberish_by_rms": [
+    {
+      "id": "Pms5ZBzZBAM_01-11-31_01-11-41",
+      "category": "Perception Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.004591790027916431,
+      "duration": 10.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Snow",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "BV1Sg411v7Yr_00-21-07_00-21-14",
+      "category": "Semantic Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.0063211265951395035,
+      "duration": 7.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "3",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "fqFf2fkbKag_00-00-00_00-00-04",
+      "category": "Perception Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.007523934822529554,
+      "duration": 4.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Table tennis",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "pPtSa4eN3vU_00-00-21_00-00-25",
+      "category": "Perception Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.010190666653215885,
+      "duration": 4.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Noodles",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "P5_Msrdg3Hk_00-00-05_00-00-30",
+      "category": "Perception Layer",
+      "modality": "sound",
+      "reason": "number_loop(00:20x)",
+      "rms": 0.011672690510749817,
+      "duration": 25.0,
+      "response_len": 2024,
+      "has_answer_tag": true,
+      "gold_answer": "Impatient",
+      "response_preview": "<think>Let's analyze the audio segments to determine the emotion of the person. The first segment is a beep sound from 0.00 to 0.50, which is likely a"
+    },
+    {
+      "id": "5vzbi96OU_o_00-00-00_00-00-10",
+      "category": "Semantic Layer",
+      "modality": "speech",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.01314319297671318,
+      "duration": 10.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Computers.",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "n1J3i4X76Y0_00-00-00_00-00-06",
+      "category": "Semantic Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.013855785131454468,
+      "duration": 6.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Yes, there are at least two distinct crashing sounds.",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "GjUy4fu6pyc_00-00-00_00-00-29",
+      "category": "Semantic Layer",
+      "modality": "speech",
+      "reason": "number_loop(00:67x)",
+      "rms": 0.014004080556333065,
+      "duration": 29.0,
+      "response_len": 2704,
+      "has_answer_tag": false,
+      "gold_answer": "Developed the atomic bomb",
+      "response_preview": "<think>Let's analyze the audio step-by-step:\n1. The man starts speaking at 0.00 seconds.\n2. He mentions \"I feel that I have blood on my hands\" from 0."
+    },
+    {
+      "id": "5jX8pPYe_Vo_00-00-00_00-00-10",
+      "category": "Semantic Layer",
+      "modality": "speech",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.019477125257253647,
+      "duration": 10.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "No",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "BV18h4y1o7wM_02-18-05_02-18-09",
+      "category": "Perception Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.019698772579431534,
+      "duration": 4.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Microwave oven",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "BZ543GyGyi8_00-00-00_00-00-07",
+      "category": "Semantic Layer",
+      "modality": "speech",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.020579984411597252,
+      "duration": 7.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Child",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "BV1Lq421A7sn_00-00-05_00-00-33",
+      "category": "Perception Layer",
+      "modality": "music",
+      "reason": "dominating_word(pl:855/979=87%)",
+      "rms": 0.02200487069785595,
+      "duration": 28.0,
+      "response_len": 3290,
+      "has_answer_tag": false,
+      "gold_answer": "Non-square-shaped but forms a parallel structure of symmetrical phrases",
+      "response_preview": "<think>\nThe audio clip provided is instrumental and features a harpsichord. The harpsichord is known for its distinct sound, which is bright and brigh"
+    },
+    {
+      "id": "NMIjkqZFN9o_00-00-00_00-00-06",
+      "category": "Perception Layer",
+      "modality": "speech",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.022610099986195564,
+      "duration": 6.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "There is no person named Ash.",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "i0d4ACwNFnM_00-00-00_00-00-05",
+      "category": "Perception Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.02437182515859604,
+      "duration": 10.9386875,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Section two",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "BV1Tc411W7Wa_00-00-27_00-00-30",
+      "category": "Signal Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.024965936318039894,
+      "duration": 3.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Fourth",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "BV1GW411g7VB_00-00-57_00-01-02",
+      "category": "Cultural Layer",
+      "modality": "speech",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.025814911350607872,
+      "duration": 5.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Cantonese",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "a_bKt4jVZzU_00-00-00_00-00-09",
+      "category": "Semantic Layer",
+      "modality": "mix-sound-speech",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.02677835524082184,
+      "duration": 9.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Swipe card",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "hKr9ZKipr6s_00-00-00_00-00-06",
+      "category": "Perception Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.027021871879696846,
+      "duration": 6.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Table Tennis",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "89S6eHinDks_00-00-24_00-00-35",
+      "category": "Perception Layer",
+      "modality": "mix-sound-speech",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.027117611840367317,
+      "duration": 11.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Temple",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    },
+    {
+      "id": "KsLXGHQekpg_00-00-00_00-00-03",
+      "category": "Signal Layer",
+      "modality": "sound",
+      "reason": "pérdida_loop(1024x)",
+      "rms": 0.027706177905201912,
+      "duration": 3.0,
+      "response_len": 8191,
+      "has_answer_tag": false,
+      "gold_answer": "Clicky",
+      "response_preview": "pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdida pérdid"
+    }
+  ]
+}
