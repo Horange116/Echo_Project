@@ -175,13 +175,13 @@ def load_dataset(path: str) -> List[dict]:
 # training helpers
 # ---------------------------------------------------------------------------
 
-def pad_and_stack(tensors: List[torch.Tensor], max_len: int) -> torch.Tensor:
-    """Pad a list of (1, L_i) tensors to (B, max_len) with -inf."""
+def pad_and_stack(tensors: List[torch.Tensor], max_len: int, pad_value: float = float("-inf")) -> torch.Tensor:
+    """Pad a list of (1, L_i) tensors to (B, max_len)."""
     batch = []
     for t in tensors:
         L = t.shape[-1]
         if L < max_len:
-            pad = torch.full((1, max_len - L), float("-inf"), device=t.device, dtype=t.dtype)
+            pad = t.new_full((1, max_len - L), pad_value)
             batch.append(torch.cat([t, pad], dim=-1))
         else:
             batch.append(t[:, :max_len])
@@ -452,7 +452,7 @@ def main() -> None:
             max_len = max(lp.shape[-1] for lp in old_logps_list)
             old_logps_padded = pad_and_stack(old_logps_list, max_len)
             ref_logps_padded = pad_and_stack(ref_logps_list, max_len)
-            masks_padded = pad_and_stack(masks_list, max_len)
+            masks_padded = pad_and_stack(masks_list, max_len, pad_value=0.0)
             masks_padded = (masks_padded > 0).float()
 
             # ════════════════════════════════════════════
