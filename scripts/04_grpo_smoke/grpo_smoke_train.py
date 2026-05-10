@@ -300,7 +300,7 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     # ── load models ──
-    print(f"[{datetime.now()}] Loading policy model (LoRA r={args.lora_rank}) ...")
+    print(f"[{datetime.now()}] Loading policy model (trainable LoRA from SFT checkpoint) ...")
     t0 = time.time()
     policy_model, processor = load_policy_model(
         args.model_path, args.adapter_path,
