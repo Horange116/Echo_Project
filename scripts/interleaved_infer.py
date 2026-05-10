@@ -187,9 +187,10 @@ def build_conversation(prompt, all_generated_text, used_segments, audio_full,
                 if continue_mode == "silent":
                     content = [{"type": "audio", "audio": seg_audio}]
                 elif continue_mode == "context":
+                    # Assistant's previous text + new audio (text before audio)
                     content = [
-                        {"type": "audio", "audio": seg_audio},
                         {"type": "text", "text": all_generated_text.strip()},
+                        {"type": "audio", "audio": seg_audio},
                     ]
                 else:  # "prompt"
                     content = [
