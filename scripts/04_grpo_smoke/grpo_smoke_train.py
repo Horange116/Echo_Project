@@ -140,13 +140,14 @@ def load_reference_model(
     model_path: str,
     adapter_path: str,
 ) -> PeftModel:
-    """Load a frozen reference model (same base + adapter)."""
+    """Load a frozen reference model on CPU to save GPU memory."""
     os.environ["QWEN_OMNI_SKIP_SPK"] = "1"
     base = Qwen2_5OmniForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.float16,
-        device_map="cuda:0",
-    )
+        device_map=None,
+        low_cpu_mem_usage=True,
+    ).cpu()
     model = PeftModel.from_pretrained(base, adapter_path)
     model.base_model.disable_talker()
     model.eval()
@@ -283,6 +284,9 @@ def log_metrics(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Enable expandable segments for better GPU memory management
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     args = parse_args()
     os.environ["QWEN_OMNI_SKIP_SPK"] = "1"
     os.makedirs(args.output_dir, exist_ok=True)
@@ -404,6 +408,9 @@ def main() -> None:
                         }
                         all_results.append((dummy, sample))
 
+            # Free GPU memory from rollout audio/generation artefacts
+            torch.cuda.empty_cache()
+
             # ════════════════════════════════════════════
             # Phase 2: Compute rewards
             # ════════════════════════════════════════════
@@ -431,6 +438,9 @@ def main() -> None:
             ref_logps_list: List[torch.Tensor] = []
             masks_list: List[torch.Tensor] = []
 
+            # Move reference model to GPU only for this phase
+            ref_model = ref_model.to(device)
+
             with torch.no_grad():
                 for prompt, completion in text_pairs:
                     inputs = build_text_inputs(
@@ -447,6 +457,10 @@ def main() -> None:
                     old_logps_list.append(old_lp)
                     ref_logps_list.append(ref_lp)
                     masks_list.append(inputs["completion_mask"])
+
+            # Move reference model back to CPU to free GPU memory
+            ref_model = ref_model.to("cpu")
+            torch.cuda.empty_cache()
 
             # Pad to same length
             max_len = max(lp.shape[-1] for lp in old_logps_list)
@@ -499,7 +513,9 @@ def main() -> None:
             )
             optimizer.step()
 
+            # Free computation graph and intermediate tensors
             policy_model.eval()
+            torch.cuda.empty_cache()
 
             # ════════════════════════════════════════════
             # Phase 6: Log
