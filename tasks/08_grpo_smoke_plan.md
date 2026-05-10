@@ -263,7 +263,23 @@ def compute_grpo_loss(per_token_logps, old_per_token_logps, advantages,
 | Rollout 模式 | 观察中 | 全 rollout 均为 1 unique seg → duplicate → finalize，pred=10% (start_percentage 问题) |
 | 日志 | ⏳ 持续写入 | TensorBoard + JSONL (`output/grpo_smoke/logs/`) |
 
-## 10. 先不做的（后续扩展）
+## 10. Reward 设计修正（2026-05-10）
+
+### 问题
+模型在推理中重复引用同一个 audio segment 被 `duplicate_penalty` 扣分。但分析 Round 2 对话上下文发现，模型的行为是：Round 1 找到一个 seg 并被 SegStoppingCriteria 打断插入音频 → Round 2 自然地在推理中再次引用刚听过的内容。这是**用证据做推理的正常行为**，不应被惩罚。
+
+### 修改
+`duplicate_penalty` 默认值从 `-0.10` 改为 `0.0`（neutral）。模型不再因重复引用已用 seg 而被扣分。
+
+### 当前 reward 设计
+| 项 | 值 | 说明 |
+|----|-----|------|
+| `unique_segment_bonus` | +0.2/个 | 鼓励探索新 seg |
+| `duplicate_penalty` | 0.0 | 重复引用已用 seg → neutral |
+| `finalize_penalty` | -0.2 | 被强制终止 |
+| `round_penalty` | -0.05 | 超轮数 / 轮数不足 |
+
+## 11. 先不做的（后续扩展）
 
 - ❌ vLLM 加速生成（smoke 不需要）
 - ❌ 多 GPU / DeepSpeed（1 GPU smoke）

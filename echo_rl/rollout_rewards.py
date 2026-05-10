@@ -18,7 +18,7 @@ from echo_rl.rewards import total_reward
 # ---------------------------------------------------------------------------
 
 _DEFAULT_COEF: dict[str, float] = {
-    "duplicate_penalty": -0.10,        # per duplicate segment
+    "duplicate_penalty": 0.0,          # per duplicate segment (neutral — re-referencing evidence during reasoning is natural)
     "round_penalty_high": -0.05,       # per round above max_rounds
     "round_penalty_low": -0.05,        # penalty if rounds < min_rounds
     "finalize_penalty": -0.20,         # when finalize was triggered

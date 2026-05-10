@@ -44,7 +44,7 @@ python -u scripts/04_grpo_smoke/grpo_smoke_train.py \
   --max_rounds 5 \
   --max_new_tokens 128 \
   --unique_segment_bonus 0.2 \
-  --duplicate_penalty -0.1 \
+  --duplicate_penalty 0.0 \
   --finalize_penalty -0.2
 
 echo "[$(date)] GRPO smoke test complete"
