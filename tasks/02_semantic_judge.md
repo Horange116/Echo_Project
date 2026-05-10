@@ -596,3 +596,76 @@ v9b-2epoch 重复循环: <seg>2.69,2.96</seg> has 0.3s...The event at...The even
 
 **Base 报告**：`output/MMAR_eval/base_zero_shot_full/eval_report.json`
 **v9b-2epoch 报告**：（未生成完整报告，仅有 `predictions.jsonl`）
+
+---
+
+## GRPO / RL 训练进展与规模化方案
+
+日期: 2026-05-09
+
+### 当前训练状态
+
+GRPO smoke test (job 41xxx) 已启动，44 条 RL 数据（`dataJson/NAQA/EAQA_RL.jsonl` 的子集），11 个 batch/epoch，3 小时预估。
+
+### 当前实现的瓶颈
+
+`grpo_smoke_train.py` 的 rollout 生成是纯串行循环：
+
+```python
+for sample_idx, sample in enumerate(batch):
+    for r_idx in range(args.num_rollouts):
+        result = run_interleaved(...)  # 一个 rollout 一个 rollout 串行
+```
+
+44 样本 × 4 rollouts × 45s ≈ 3 小时
+
+若线性扩展到完整 21,900 条数据（`EAQA_RL.jsonl`）：
+21,900 × 4 × 45s ≈ 45 天 ❌ 完全不可行
+
+### 三项关键缓解
+
+#### 1. 生成服务化（vLLM）
+
+当前每个 rollout 串行跑 `model.generate()`，GPU 利用率低（generate 完等音频处理）。用 vLLM 可：
+
+- 把几十个 generation 请求一次性发给推理引擎
+- 内部 continuous batching 把 GPU 利用率拉满
+- 吞吐量提升 **4-8 倍**
+
+#### 2. 分布式（verl 方案）
+
+论文 Stage 2 用 **verl + Ray** 多卡并行：
+
+- 8 张卡同时做 rollout，每张卡只处理 1/8 的数据
+- 8 × 4x（vLLM 加速）= **~32x 加速**
+- 87,600 generations → **~5 小时**
+
+已有脚本 `script/stage2_multiturn_rl.sh`。
+
+#### 3. 数据不需要全部 21,900 条
+
+RL 只需要训"QA 正确但 CoT 不够好"的样本。`EAQA_RL.jsonl`（21,900 条）里大部分是简单样本（模型已经能答对），真正需要 RL 的只是其中一部分。论文 Stage 2 实际用的数据量也远小于 21,900。
+
+### 四条腿走路
+
+| 方案 | 加速比 | 实现成本 |
+|------|--------|----------|
+| 当前（smoke, 1 GPU, 串行 rollout） | 1x | 已完成 |
+| 接入 ms-swift GRPOTrainer + vLLM | ~4x | 需改造（取代手写循环） |
+| 用 verl + Ray（论文方案） | ~16-32x | 已有脚本 `script/stage2_multiturn_rl.sh` |
+| 数据筛选，只训需要 RL 的样本 | ~5-10x | 已有 `split_rl.jsonl` 筛选逻辑 |
+
+### 路线
+
+烟测确认训练流程正确后，直接走 verl 方案即可解决大规模训练的时间问题。完整 21,900 条训练可压缩到几小时内。
+
+### 相关脚本
+
+| 脚本 | 路径 |
+|------|------|
+| GRPO smoke 训练 | `scripts/04_grpo_smoke/grpo_smoke_train.py` |
+| GRPO 工具函数 | `scripts/04_grpo_smoke/grpo_utils.py` |
+| Rollout reward | `echo_rl/rollout_rewards.py` |
+| 基础 reward | `echo_rl/rewards.py` |
+| Interleaved 推理 | `scripts/interleaved_infer.py` |
+| 多轮 RL 脚本 | `script/stage2_multiturn_rl.sh` |
