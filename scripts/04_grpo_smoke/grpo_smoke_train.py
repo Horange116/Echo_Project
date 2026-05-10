@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from peft import LoraConfig, PeftModel, get_peft_model
+from peft import PeftModel
 from torch.utils.tensorboard import SummaryWriter
 from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
 
@@ -81,8 +81,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--kl_coef", type=float, default=0.04)
     p.add_argument("--num_epochs", type=int, default=1)
     p.add_argument("--max_grad_norm", type=float, default=1.0)
-    p.add_argument("--lora_rank", type=int, default=8)
-    p.add_argument("--lora_alpha", type=int, default=32)
     p.add_argument("--seed", type=int, default=42)
     # rollout
     p.add_argument("--max_rounds", type=int, default=5)
@@ -107,37 +105,33 @@ def parse_args() -> argparse.Namespace:
 def load_policy_model(
     model_path: str,
     adapter_path: str,
-    lora_rank: int = 8,
-    lora_alpha: int = 32,
 ) -> Tuple[PeftModel, Qwen2_5OmniProcessor]:
-    """Load the policy model for GRPO training.
+    """Load policy model: enable training on SFT checkpoint's LoRA weights.
 
-    Strategy: merge SFT checkpoint into base → add trainable LoRA.
+    We train the existing LoRA adapters directly (no merge/unload) to
+    avoid PEFT forward-compatibility issues.
     """
     os.environ["QWEN_OMNI_SKIP_SPK"] = "1"
     processor = Qwen2_5OmniProcessor.from_pretrained(model_path)
     base = Qwen2_5OmniForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.float16,
-        device_map="auto",
+        device_map="cuda:0",
     )
-    # Load SFT checkpoint
-    sft_model = PeftModel.from_pretrained(base, adapter_path)
-    sft_model.base_model.disable_talker()
-    # Merge SFT weights into base → unload PEFT wrapper
-    merged = sft_model.merge_and_unload()
-    # Add trainable LoRA for RL
-    lora_config = LoraConfig(
-        r=lora_rank,
-        lora_alpha=lora_alpha,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=0.0,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(merged, lora_config)
-    model.print_trainable_parameters()
+    model = PeftModel.from_pretrained(base, adapter_path, is_trainable=True)
+    model.base_model.disable_talker()
+    model = model.to("cuda:0")
+
+    # Freeze everything except LoRA parameters
+    for n, p in model.named_parameters():
+        if "lora" in n:
+            p.requires_grad_(True)
+        else:
+            p.requires_grad_(False)
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"  Trainable: {trainable:,} / {total:,} params ({trainable/total*100:.2f}%)")
     model.eval()
     return model, processor
 
@@ -145,15 +139,14 @@ def load_policy_model(
 def load_reference_model(
     model_path: str,
     adapter_path: str,
-    device: torch.device,
 ) -> PeftModel:
-    """Load a frozen reference model (same base + adapter, no LoRA)."""
+    """Load a frozen reference model (same base + adapter)."""
     os.environ["QWEN_OMNI_SKIP_SPK"] = "1"
     base = Qwen2_5OmniForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.float16,
-        device_map=None,  # manual placement
-    ).to(device)
+        device_map="cuda:0",
+    )
     model = PeftModel.from_pretrained(base, adapter_path)
     model.base_model.disable_talker()
     model.eval()
@@ -311,18 +304,13 @@ def main() -> None:
     t0 = time.time()
     policy_model, processor = load_policy_model(
         args.model_path, args.adapter_path,
-        lora_rank=args.lora_rank, lora_alpha=args.lora_alpha,
     )
-    print(f"  Policy model loaded in {time.time() - t0:.1f}s, device={policy_model.device}")
-
-    # Align policy model to cuda:0 if device_map="auto" placed it elsewhere
-    policy_model = policy_model.to(device)
-    policy_model.eval()
+    print(f"  Policy model loaded in {time.time() - t0:.1f}s")
 
     # Reference model (same checkpoint, frozen)
     print(f"[{datetime.now()}] Loading reference model ...")
     t0 = time.time()
-    ref_model = load_reference_model(args.model_path, args.adapter_path, device)
+    ref_model = load_reference_model(args.model_path, args.adapter_path)
     print(f"  Reference model loaded in {time.time() - t0:.1f}s")
 
     # ── load data ──
