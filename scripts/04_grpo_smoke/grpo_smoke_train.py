@@ -161,14 +161,21 @@ def load_reference_model(
 # ---------------------------------------------------------------------------
 
 def load_dataset(path: str) -> List[dict]:
-    """Load split_rl.jsonl (44 samples)."""
+    """Load split_rl.jsonl and filter samples with missing audio files."""
+    import os
     samples = []
+    skipped = 0
     with open(path) as f:
         for line in f:
             line = line.strip()
             if line:
-                samples.append(json.loads(line))
-    print(f"  Dataset: {len(samples)} samples from {path}")
+                s = json.loads(line)
+                if os.path.exists(s.get("audio_path", "")):
+                    samples.append(s)
+                else:
+                    skipped += 1
+                    print(f"  Skipping {s.get('id','?')}: audio not found")
+    print(f"  Dataset: {len(samples)} loaded, {skipped} skipped (missing audio)")
     return samples
 
 
