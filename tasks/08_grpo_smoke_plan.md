@@ -332,7 +332,66 @@ v9b-2epoch checkpoint 在 interleaved 推理下的 base behavior 是"找一个 s
 - Avg unique segs（探索的音频段数）
 - Avg rounds（用完 5 轮还是提前出答案）
 
-## 14. 先不做的（后续扩展）
+## 14. Continue mode 三方案对比结果（2026-05-11）
+
+### 汇总
+
+| 指标 | silent | context | prompt3 |
+|------|--------|---------|---------|
+| **Accuracy** | **25.0%** (5/20) | 20.0% (4/20) | 20.0% (4/20) |
+| Has answer | 55.0% (11/20) | 50.0% (10/20) | **65.0%** (13/20) |
+| Avg segs | 1.00 | 1.00 | 1.00 |
+| Avg rounds | 4.60 | 4.50 | 4.55 |
+| Interleaved | 20/20 | 20/20 | 20/20 |
+| 0 seg / 1 seg / >1 seg | 0 / 20 / 0 | 0 / 20 / 0 | 0 / 20 / 0 |
+
+### 核心结论
+
+**三个方案几乎没有区别。** 不论 continue_mode 如何，模型始终只生成 1 个 unique seg（Round 1 找到的第 1 个 seg），后续轮次全部重复引用同一个 seg 直到 max_rounds。
+
+### 原因分析
+
+这不是 prompt 工程问题，而是 SFT checkpoint 的 base behavior：
+- v9b-2epoch checkpoint 在 interleaved 推理下的默认行为是"找到一个 seg 就够了"
+- SFT 数据中没有多 seg 推理的示例，模型没有学会探索多个音频段
+- 无论 silent/context/prompt3 如何包装新轮次的用户消息，模型在 Round 2+ 的行为完全一致：重复已用 seg
+
+### 对比 baseline
+
+| 版本 | 准确率 | 说明 |
+|------|--------|------|
+| 原始 finalize（强制截断） | 35.0% | 强制出答案，准确率最高但缺少多 seg 探索 |
+| silent | 25.0% | 允许继续推理但模型只会重复 |
+| context | 20.0% | 同 |
+| prompt3 | 20.0% | 同 |
+
+**推论**: 强制 finalize 虽然准确率高，但只是"逼模型猜答案"，没有真正的多步推理。GRPO 训练是改变 base behavior 的必要路径——需要让模型从 reward 信号中学会"探索多 seg → 更高准确率"。
+
+## 15. 自定义生成循环（2026-05-11）
+
+### 状态
+✅ 已实现 `scripts/interleaved_infer_custom.py`，与原有逻辑完全隔离。
+
+### 原理
+用 token-by-token 的 KV cache 续写替代每轮 `model.generate()`：
+- Round 1: `thinker.prefill()` → KV cache → 逐 token 解码，检测 `</seg>`
+- Round 2+: 编码 segment 音频 → `thinker.get_audio_features()` → 构建 `[<|audio_bos|> <AUDIO>×N <|audio_eos|> continue_prompt]` → 插入 KV cache → 继续解码
+
+### 已验证的关键能力
+- `thinker.get_audio_features()` 独立编码任意音频段 ✅
+- `thinker(input_ids, past_key_values, input_features, ...)` 带 KV cache 的 mini-prefill ✅
+- KV cache 续写后继续解码 ✅
+- 逐 token 检测 `</seg>` / `</answer>` 停止信号 ✅
+
+### 性能收益
+- 每轮只处理新增的 ~50-100 tokens（音频嵌入 + 继续 prompt），而不是全量历史对话
+- 5 轮对话预期 ~3-4 倍加速
+
+### 剩余风险
+- `position_ids` / `cache_position` 未显式传递，RoPE 位置可能不精确（但在短序列上影响不大）
+- `continue_mode` 暂时只支持 "prompt"（silent/context 需要不同的 KV cache 插入策略）
+
+## 16. 先不做的（后续扩展）
 
 - ❌ vLLM 加速生成（smoke 不需要）
 - ❌ 多 GPU / DeepSpeed（1 GPU smoke）
