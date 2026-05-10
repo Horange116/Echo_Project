@@ -263,7 +263,35 @@ def compute_grpo_loss(per_token_logps, old_per_token_logps, advantages,
 | Rollout 模式 | 观察中 | 全 rollout 均为 1 unique seg → duplicate → finalize，pred=10% (start_percentage 问题) |
 | 日志 | ⏳ 持续写入 | TensorBoard + JSONL (`output/grpo_smoke/logs/`) |
 
-## 10. Reward 设计修正（2026-05-10）
+## 10. v9b-2epoch batch eval（2026-05-10）
+
+### 结果（Job 41788, 20 samples, 重复 seg 触发 finalize 版本）
+| 指标 | 值 |
+|------|-----|
+| 准确率 | 7/20 (35.0%) |
+| 有解析出答案 | 10/20 (50%) |
+| Unique segs = 1 | 20/20 (100%) |
+| 平均 round | 2.0 |
+
+**核心发现**: 所有样本都是 Round 1 找到 1 seg → Round 2 重复引用 → 触发 finalize。模型不会自然探索多个 seg。
+
+### 推论
+v9b-2epoch checkpoint 在 interleaved 推理下的 base behavior 是"找一个 seg 就够了"。这不是模型错误，而是 SFT 数据中没有多 seg 推理的示例。GRPO 需要从这种 base behavior 开始学习探索。
+
+## 11. 推理流程修正（2026-05-10）
+
+### 问题
+即使 reward 不惩罚重复 seg，推理流程本身在检测到重复时也会中断并强制 finalize。这导致模型在 Round 2 重复引用 seg 时直接被截断，没有机会继续推理。
+
+### 修改
+1. `on_duplicate_seg` 默认值从 `"stop"` → `"ignore_continue"`: 重复 seg 不插入音频但继续生成
+2. Point 2 逻辑（response 中 seg 全部已处理过）: 不再 `break` + finalize，而是记录 round，继续下一轮
+3. Finalize 只在 `max_rounds` 用完且无答案时触发（安全网）
+
+### 效果
+模型现在可以在 Round 2+ 继续推理而不会被中断。Job 41790 正在运行验证。
+
+## 12. Reward 设计修正（2026-05-10）
 
 ### 问题
 模型在推理中重复引用同一个 audio segment 被 `duplicate_penalty` 扣分。但分析 Round 2 对话上下文发现，模型的行为是：Round 1 找到一个 seg 并被 SegStoppingCriteria 打断插入音频 → Round 2 自然地在推理中再次引用刚听过的内容。这是**用证据做推理的正常行为**，不应被惩罚。
@@ -279,7 +307,7 @@ def compute_grpo_loss(per_token_logps, old_per_token_logps, advantages,
 | `finalize_penalty` | -0.2 | 被强制终止 |
 | `round_penalty` | -0.05 | 超轮数 / 轮数不足 |
 
-## 11. 先不做的（后续扩展）
+## 13. 先不做的（后续扩展）
 
 - ❌ vLLM 加速生成（smoke 不需要）
 - ❌ 多 GPU / DeepSpeed（1 GPU smoke）

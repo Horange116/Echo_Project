@@ -285,7 +285,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
                     tmp_dir="output/interleaved_tmp",
                     duplicate_iou_threshold=0.8,
                     max_duplicate_segments=1,
-                    on_duplicate_seg="stop",
+                    on_duplicate_seg="ignore_continue",
                     finalize_on_stop=True,
                     finalize_max_new_tokens=64,
                     gold_answer=None):
@@ -457,10 +457,9 @@ def run_interleaved(model, processor, audio_path, question, choices,
             })
             continue  # ← answer check skipped when segs were found
 
-        # ── DETECT: segs in response but all already processed (repeat loop) ──
+        # ── DETECT: segs in response but all already processed ──
         all_segs_this_round = parse_segments(response)
         if all_segs_this_round:
-            duplicate_count += len(all_segs_this_round)
             for s, e in all_segs_this_round:
                 duplicate_segments_info.append({
                     "round": round_idx + 1,
@@ -468,22 +467,26 @@ def run_interleaved(model, processor, audio_path, question, choices,
                     "iou": 1.0,
                     "duplicate_of": {"start": s, "end": e},
                 })
+            # Append text and continue — re-referencing evidence during reasoning is normal
+            if all_generated_text:
+                all_generated_text += " " + response
+            else:
+                all_generated_text = response
             round_outputs.append({
                 "round": round_idx + 1,
                 "text": response,
                 "detected_seg_text": str([(s, e) for s, e in all_segs_this_round]),
                 "parsed_start": None,
                 "parsed_end": None,
-                "stop_reason": "duplicate_seg",
+                "stop_reason": "continue",
                 "num_audios_before": num_audios_before,
                 "num_audios_after": num_audios_after,
                 "inserted_audio_paths": [],
                 "duplicate_of_previous": True,
                 "duplicate_iou": 1.0,
             })
-            stop_reason = "duplicate_seg"
-            print(f"  重复 seg (全部已处理过)，触发 finalize")
-            break
+            print(f"  重复 seg (已处理过，继续推理)")
+            continue
 
         # ── PRIORITY 2: No segs — check for answer ──
         if has_answer(response) or round_stop_reason == "answer":
@@ -652,7 +655,7 @@ def main():
     # New parameters
     parser.add_argument("--duplicate_iou_threshold", type=float, default=0.8)
     parser.add_argument("--max_duplicate_segments", type=int, default=1)
-    parser.add_argument("--on_duplicate_seg", default="stop",
+    parser.add_argument("--on_duplicate_seg", default="ignore_continue",
                         choices=["stop", "ignore_continue", "insert_once_continue"])
     parser.add_argument("--finalize_on_stop", type=lambda x: x.lower() == "true", default=True)
     parser.add_argument("--finalize_max_new_tokens", type=int, default=64)
