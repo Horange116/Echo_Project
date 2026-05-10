@@ -29,14 +29,26 @@ def get_per_token_logps(
     """Run forward pass and return per-token log P(token_{t+1} | tokens[:t+1]).
 
     Args:
-        model: HuggingFace model (returns ``logits`` from ``__call__``).
+        model: PeftModel or Qwen2_5OmniForConditionalGeneration.
+               Must have a ``.thinker`` submodule (the text backbone).
         input_ids: (B, T) token IDs.
         attention_mask: (B, T) attention mask.
 
     Returns:
         (B, T-1) tensor of log-probabilities for each predicted token.
+
+    Notes:
+        Qwen2_5OmniForConditionalGeneration does **not** define ``forward()``
+        (it inherits ``_forward_unimplemented`` from ``nn.Module``).  We use
+        ``model.get_base_model().thinker`` (PeftModel) or ``model.thinker``
+        (raw) to get the text-backbone which has a proper forward method.
     """
-    outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+    # Access the thinker submodule (text backbone with forward())
+    if hasattr(model, "get_base_model"):
+        thinker = model.get_base_model().thinker
+    else:
+        thinker = model.thinker
+    outputs = thinker(input_ids=input_ids, attention_mask=attention_mask)
     logits = outputs.logits                     # (B, T, V)
     log_probs = F.log_softmax(logits, dim=-1)   # (B, T, V)
     # gather log P(token_t | tokens[:t]) for each position
