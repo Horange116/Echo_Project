@@ -1,0 +1,16 @@
+{
+  "input": "output/judge/judged_subset_600_by_source_type.jsonl",
+  "description": "Re-split: 3x RL data for GRPO training",
+  "timestamp": "2026-05-12T03:00:00+08:00",
+  "total": 600,
+  "rl_count": 129,
+  "rl_by_type": {
+    "count_before": 27,
+    "duration_compare": 3,
+    "duration_percentage": 36,
+    "order": 9,
+    "overlap": 18,
+    "repeated_event_gap": 3,
+    "start_percentage": 36
+  }
+}

@@ -565,3 +565,41 @@ Phase 6: log paper-aligned metrics
 ### 注意事项
 - Rconsist 当前基于纯文本近似（response 中无音频 token）
 - 切换到完整多模态 GRPO（verl）时，需在检查 `</seg>` 后下一个文本 token 前先跳过音频 token
+
+## 21. 对话重建修正 + 数据扩增（2026-05-12）
+
+### 问题
+Job 41921 输出确认 Round 2+ 的 `build_conversation` 使用了多轮次对话结构，导致 `<|im_end|>` turn boundary 让模型把 Round 2 理解为"新问题"而非"继续推理"。所有 32 个 rollout 全部是 Round 1 产生 1 seg → Round 2 重复 seg → ... → 空转 5 轮。
+
+### 修改
+`build_conversation()` 重构：Round 2+ 不再创建独立 assistant + user 消息，而是把完整上下文拼成**单条 user 消息**：
+
+```
+Round 1:  user: [全音频A, prompt]
+          asst: [模型生成, 在</seg>截断]
+
+Round 2+: user: [全音频A, "原始问题\\n上一轮回答", 裁剪音频A_s:e]  ← 单消息, 无turn boundary
+          asst: [模型续写]
+```
+
+同时：
+- Round 2+ 重复 seg 触发的 `on_duplicate_seg="stop"` 现已正确截停进入 finalization（之前"已处理过"路径缺少 stop 逻辑）
+- `max_rounds` 设为 10（安全阀），实际轮次取决于模型行为
+- `max_new_tokens` 提升到 256
+
+### 效果验证（Job 41922）
+| 指标 | 旧格式 (41921) | 新格式 (41922) |
+|------|:-:|:-:|
+| 平均耗时 | ~37s/rollout | **~12.5s/rollout** |
+| 平均轮数 | 5 | **2.1** |
+| 重复 seg 截停 | ❌ 空转 5 轮 | ✅ 1 轮新 seg 后直接 finalize |
+
+### 数据扩增
+RL 数据集从 44 条扩至 **129 条**（3x），重新从 `judged_subset_600_by_source_type.jsonl` 按类型均衡采样。
+
+### 当前训练配置（Job 41924）
+- 数据: 129 条（3 条音频缺失）
+- batch_size=4, num_rollouts=8, num_epochs=2
+- max_rounds=10, max_new_tokens=256, finalize_max_new_tokens=64
+- 预估: ~7 小时
+

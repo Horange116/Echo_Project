@@ -35,16 +35,14 @@ python -u scripts/04_grpo_smoke/grpo_smoke_train.py \
   --adapter_path "$ADAPTER" \
   --data_path "output/judge/split_rl.jsonl" \
   --output_dir "output/grpo_smoke" \
-  --num_rollouts 4 \
+  --num_rollouts 8 \
   --batch_size 4 \
   --learning_rate 1e-6 \
   --kl_coef 0.04 \
-  --num_epochs 1 \
+  --num_epochs 2 \
   --temperature 0.9 \
-  --max_rounds 5 \
-  --max_new_tokens 128 \
-  --unique_segment_bonus 0.2 \
-  --duplicate_penalty 0.0 \
-  --finalize_penalty -0.2
+  --max_rounds 10 \
+  --max_new_tokens 256 \
+  --finalize_max_new_tokens 64
 
 echo "[$(date)] GRPO smoke test complete"

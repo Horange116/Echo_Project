@@ -160,54 +160,57 @@ def load_model_and_processor(model_path, adapter_path=None):
 def build_conversation(prompt, all_generated_text, used_segments, audio_full,
                        sample_rate, audio_list, round_idx, is_finalize,
                        continue_mode="prompt"):
-    """Build the conversation messages for the current round.
+    """Build the conversation for the current round.
 
-    continue_mode controls the follow-up user message after seg insertion:
-      "prompt"  — audio + "I have listened..." instruction (default)
-      "silent"  — pure audio, no text
-      "context" — audio + assistant's previous text (no instruction)
+    Round 1:  user message with full audio + prompt.
+    Round 2+: single user message with full audio + prompt + assistant
+              text + segment audios concatenated
+              (``x'_i = x_i ⊕ o ⊕ A_s:e``, no turn boundary).
+    Finalize: separate user + assistant messages for final answer.
     """
-    conversation = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "audio", "audio": audio_full},
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
+    if is_finalize:
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "audio", "audio": audio_full},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        if all_generated_text.strip():
+            conversation.append({
+                "role": "assistant",
+                "content": all_generated_text.strip(),
+            })
+        return conversation
 
+    if round_idx == 0:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "audio", "audio": audio_full},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+
+    # Round 2+: x'_i = x_i ⊕ o ⊕ A_s:e  — single user message, no turn boundary
+    combined_text = prompt
     if all_generated_text.strip():
-        conversation.append({
-            "role": "assistant",
-            "content": all_generated_text.strip(),
-        })
+        combined_text = prompt + "\n" + all_generated_text.strip()
 
-    if not is_finalize:
-        for idx, seg_info in enumerate(used_segments):
-            seg_audio, _ = librosa.load(seg_info["segment_path"], sr=sample_rate)
-            audio_list.append(seg_audio)
+    content = [
+        {"type": "audio", "audio": audio_full},
+        {"type": "text", "text": combined_text},
+    ]
+    for seg_info in used_segments:
+        seg_audio, _ = librosa.load(seg_info["segment_path"], sr=sample_rate)
+        audio_list.append(seg_audio)
+        content.append({"type": "audio", "audio": seg_audio})
 
-            if idx == len(used_segments) - 1 and round_idx > 0:
-                if continue_mode == "silent":
-                    content = [{"type": "audio", "audio": seg_audio}]
-                elif continue_mode == "context":
-                    # Assistant's previous text + new audio (text before audio)
-                    content = [
-                        {"type": "text", "text": all_generated_text.strip()},
-                        {"type": "audio", "audio": seg_audio},
-                    ]
-                else:  # "prompt"
-                    content = [
-                        {"type": "audio", "audio": seg_audio},
-                        {"type": "text", "text": build_continue_prompt()},
-                    ]
-                conversation.append({
-                    "role": "user",
-                    "content": content,
-                })
-
-    return conversation
+    return [{"role": "user", "content": content}]
 
 
 class SegStoppingCriteria(StoppingCriteria):
@@ -490,11 +493,31 @@ def run_interleaved(model, processor, audio_path, question, choices,
                     "iou": 1.0,
                     "duplicate_of": {"start": s, "end": e},
                 })
-            # Append text and continue — re-referencing evidence during reasoning is normal
+            # Append text
             if all_generated_text:
                 all_generated_text += " " + response
             else:
                 all_generated_text = response
+
+            # If stop policy is in effect, break on repeated segs
+            if on_duplicate_seg == "stop":
+                stop_reason = "duplicate_seg"
+                round_outputs.append({
+                    "round": round_idx + 1,
+                    "text": response,
+                    "detected_seg_text": str([(s, e) for s, e in all_segs_this_round]),
+                    "parsed_start": None,
+                    "parsed_end": None,
+                    "stop_reason": "duplicate_seg",
+                    "num_audios_before": num_audios_before,
+                    "num_audios_after": num_audios_after,
+                    "inserted_audio_paths": [],
+                    "duplicate_of_previous": True,
+                    "duplicate_iou": 1.0,
+                })
+                print(f"  重复 seg (已处理过)，on_duplicate_seg=stop，结束 interleaved")
+                break
+
             round_outputs.append({
                 "round": round_idx + 1,
                 "text": response,
