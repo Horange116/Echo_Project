@@ -23,10 +23,9 @@ use verl with the full multi-modal forward pass.
 Logged metrics (TensorBoard + stdout)
 -------------------------------------
   reward/*           rollout_total, base_total, accuracy, segment, format, consistency
-  rollout/*          duplicate_penalty, finalize_penalty, unique_segment_bonus,
-                     round_penalty, triggered_interleaved_rate,
-                     unique_segment_count, duplicate_seg_count,
-                     finalize_rate, answer_rate, answer_correct_rate
+  rollout/*          triggered_interleaved_rate, unique_segment_count,
+                     duplicate_seg_count, finalize_rate, answer_rate,
+                     answer_correct_rate, round_count
   train/*            loss, approx_kl, ratio, grad_norm, learning_rate, epoch
 """
 
@@ -87,12 +86,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--temperature", type=float, default=0.9)
     p.add_argument("--max_new_tokens", type=int, default=128)
     p.add_argument("--finalize_max_new_tokens", type=int, default=64)
-    # rollout_reward coefficients
-    p.add_argument("--duplicate_penalty", type=float, default=-0.10)
-    p.add_argument("--finalize_penalty", type=float, default=-0.20)
-    p.add_argument("--unique_segment_bonus", type=float, default=0.20)
-    p.add_argument("--round_penalty_high", type=float, default=-0.05)
-    p.add_argument("--round_penalty_low", type=float, default=-0.05)
     # log-prob text-only (max context length)
     p.add_argument("--max_text_length", type=int, default=2048)
     return p.parse_args()
@@ -208,10 +201,6 @@ def parse_rollout_metrics(
         "segment": reward_dict.get("segment", 0.0),
         "format": reward_dict.get("format", 0.0),
         "consistency": reward_dict.get("consistency", 0.0),
-        "duplicate_penalty": reward_dict.get("duplicate_penalty", 0.0),
-        "finalize_penalty": reward_dict.get("finalize_penalty", 0.0),
-        "unique_segment_bonus": reward_dict.get("unique_segment_bonus", 0.0),
-        "round_penalty": reward_dict.get("round_penalty", 0.0),
         "triggered_interleaved": int(meta["triggered_interleaved"]),
         "unique_segment_count": meta["unique_segment_count"],
         "duplicate_seg_count": meta["duplicate_seg_count"],
@@ -245,13 +234,7 @@ def log_metrics(
         vals = [m[key] for m in all_metrics]
         writer.add_scalar(f"reward/{key}", sum(vals) / len(vals), step)
 
-    # Rollout diagnostics
-    for key in ("duplicate_penalty", "finalize_penalty", "unique_segment_bonus",
-                "round_penalty"):
-        vals = [m[key] for m in all_metrics]
-        writer.add_scalar(f"rollout/{key}", sum(vals) / len(vals), step)
-
-    # Rates
+    # Rollout diagnostics — rates
     n = len(all_metrics)
     for key, label in [
         ("triggered_interleaved", "triggered_interleaved_rate"),
@@ -267,21 +250,22 @@ def log_metrics(
         vals = [m[key] for m in all_metrics]
         writer.add_scalar(f"rollout/{key}", sum(vals) / len(vals), step)
 
-    # Console one-liner
+    # Console one-liner (paper-aligned)
     avg_rt = sum(m["rollout_total"] for m in all_metrics) / n
-    avg_bt = sum(m["base_total"] for m in all_metrics) / n
+    avg_fmt = sum(m["format"] for m in all_metrics) / n
+    avg_cst = sum(m["consistency"] for m in all_metrics) / n
+    avg_acc = sum(m["accuracy"] for m in all_metrics) / n
+    avg_seg = sum(m["segment"] for m in all_metrics) / n
     n_correct = sum(m["is_correct"] for m in all_metrics)
-    n_answer = sum(m["has_answer"] for m in all_metrics)
-    n_unique_ge2 = sum(1 for m in all_metrics if m["unique_segment_count"] >= 2)
     avg_uniq = sum(m["unique_segment_count"] for m in all_metrics) / n
     avg_dup = sum(m["duplicate_seg_count"] for m in all_metrics) / n
     kl_val = loss_dict["kl"].item()
 
     print(
         f"  step {step:3d} | loss {loss_dict['loss'].item():.4f} | "
-        f"rt {avg_rt:+.3f} bt {avg_bt:+.3f} | "
-        f"acc {n_correct}/{n} ans {n_answer}/{n} | "
-        f"uniq≥2 {n_unique_ge2} | uniq {avg_uniq:.1f} dup {avg_dup:.1f} | "
+        f"R {avg_rt:+.3f} (fmt {avg_fmt:+.2f} cst {avg_cst:+.2f} "
+        f"acc {avg_acc:.2f} seg {avg_seg:.2f}) | "
+        f"correct {n_correct}/{n} | uniq {avg_uniq:.1f} dup {avg_dup:.1f} | "
         f"KL {kl_val:.4f}"
     )
 
@@ -327,16 +311,6 @@ def main() -> None:
     # ── load data ──
     dataset = load_dataset(args.data_path)
     print(f"  Data columns: {list(dataset[0].keys()) if dataset else 'empty'}")
-
-    # ── reward coefficients ──
-    reward_coef = {
-        "duplicate_penalty": args.duplicate_penalty,
-        "finalize_penalty": args.finalize_penalty,
-        "unique_segment_bonus": args.unique_segment_bonus,
-        "round_penalty_high": args.round_penalty_high,
-        "round_penalty_low": args.round_penalty_low,
-    }
-    print(f"  Reward coef: {reward_coef}")
 
     # ── optimiser ──
     optimizer = torch.optim.AdamW(
@@ -428,7 +402,6 @@ def main() -> None:
                     result.get("final_response", ""),
                     sample.get("answer", ""),
                     meta,
-                    coef=reward_coef,
                 )
                 all_metrics.append(parse_rollout_metrics(result, sample, rew))
 
