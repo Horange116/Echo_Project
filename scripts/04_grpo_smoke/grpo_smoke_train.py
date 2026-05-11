@@ -390,6 +390,7 @@ def main() -> None:
                         all_results.append((dummy, sample))
 
             # Free GPU memory from rollout audio/generation artefacts
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
             # ════════════════════════════════════════════
@@ -420,6 +421,7 @@ def main() -> None:
 
             # Move reference model to GPU only for this phase
             ref_model = ref_model.to(device)
+            torch.cuda.synchronize()
 
             with torch.no_grad():
                 for prompt, completion in text_pairs:
