@@ -31,8 +31,6 @@ from peft import PeftModel
 from transformers import (
     Qwen2_5OmniForConditionalGeneration,
     Qwen2_5OmniProcessor,
-    StoppingCriteria,
-    StoppingCriteriaList,
 )
 
 # ── constants and helpers (self-contained) ──
@@ -44,22 +42,6 @@ THINK_ANSWER_PATTERN = re.compile(
 )
 SAMPLE_RATE = 16000
 
-
-class SegAnswerStoppingCriteria(StoppingCriteria):
-    """Stop generation when </seg> or </answer> appears in generated text."""
-    def __init__(self, tokenizer):
-        self.tokenizer = tokenizer
-        self.stop_reason = None
-
-    def __call__(self, input_ids, scores, **kwargs):
-        text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
-        if "</answer>" in text:
-            self.stop_reason = "answer"
-            return True
-        if "</seg>" in text:
-            self.stop_reason = "seg"
-            return True
-        return False
 
 
 def segments_iou(a_start, a_end, b_start, b_end):
@@ -204,15 +186,15 @@ def _insert_and_prefill(thinker, new_input_ids, past_key_values,
 
 
 @torch.no_grad()
-def _decode_one(thinker, input_ids, past_key_values):
+def _decode_one(thinker, input_ids, past_key_values, attention_mask=None, temperature=0.0):
     """Single decode step with KV cache. Returns (next_token_id, past_kv)."""
     outputs = thinker(
         input_ids=input_ids,
         past_key_values=past_key_values,
+        attention_mask=attention_mask,
         use_cache=True,
     )
-    next_logit = outputs.logits[0, -1, :]
-    next_id = next_logit.argmax().item()
+    next_id = _sample_token(outputs.logits[0, -1, :], temperature)
     return next_id, outputs.past_key_values
 
 
@@ -240,33 +222,50 @@ def _encode_segment_audio(processor, thinker, segment_audio, sample_rate):
     return input_features, feature_attention_mask, audio_features.shape[0]
 
 
-def _decode_round(thinker, past_key_values, tokenizer, max_new_tokens,
-                  temperature=0.0):
-    """Decode tokens one-by-one reusing KV cache until stop signal.
+@torch.no_grad()
+def _decode_loop(thinker, first_id, past_kv, attention_mask,
+                 max_new_tokens, tokenizer, temperature, device):
+    """Decode tokens one-by-one reusing KV cache with attention_mask tracking.
 
     Args:
         thinker: thinker module
-        past_key_values: starting KV cache (must contain at least 1 prefill step)
-        tokenizer: for decoding tokens
-        max_new_tokens: max to generate
+        first_id: first token id (from prefill/insert logits)
+        past_kv: KV cache from prefill/insert
+        attention_mask: [1, seq_len] or None (computed from KV cache length)
+        max_new_tokens: max tokens to generate (including first_id)
+        tokenizer: for stop signal detection
         temperature: 0=greedy
+        device: torch device
 
     Returns:
-        gen_ids: list of int token ids
+        gen_ids: list of generated token ids
+        past_kv: updated KV cache
         stop_reason: "seg" / "answer" / "max_tokens"
-        past_key_values: updated KV cache
     """
-    gen_ids = []
-    past_kv = past_key_values
+    gen_ids = [first_id]
 
-    for step in range(max_new_tokens):
-        if step == 0:
-            # First token: read from past_key_values' last logit position.
-            # We need the logits from the insertion/prefill step.
-            # The caller provides them.
-            raise RuntimeError("_decode_round requires the first logit from the caller")
+    if attention_mask is None:
+        seq_len = past_kv[0][0].shape[2]
+        attention_mask = torch.ones(1, seq_len, dtype=torch.long, device=device)
 
-    return gen_ids, "max_tokens", past_kv
+    for step in range(max_new_tokens - 1):
+        curr_id = torch.tensor([[gen_ids[-1]]], device=device)
+        next_id, past_kv = _decode_one(thinker, curr_id, past_kv, attention_mask, temperature)
+
+        attention_mask = torch.cat(
+            [attention_mask, torch.ones(1, 1, dtype=torch.long, device=device)],
+            dim=1,
+        )
+
+        gen_ids.append(next_id)
+
+        current_text = tokenizer.decode(gen_ids, skip_special_tokens=False)
+        if "</answer>" in current_text:
+            return gen_ids, past_kv, "answer"
+        if "</seg>" in current_text:
+            return gen_ids, past_kv, "seg"
+
+    return gen_ids, past_kv, "max_tokens"
 
 
 def _sample_token(logits, temperature):
@@ -355,27 +354,19 @@ def run_interleaved_custom(model, processor, audio_path, question, choices,
 
         # ── Generate ──
         if round_idx == 0:
-            # ROUND 1: prefill + thinker.generate() for fast decoding
+            # ROUND 1: prefill + token-by-token decode with attention_mask
             past_kv, prefill_logits = _prefill(
                 thinker, input_ids, input_features, feature_attention_mask
             )
             first_id = _sample_token(prefill_logits[0, -1, :], temperature)
 
-            stopping = SegAnswerStoppingCriteria(tokenizer)
-            output = thinker.generate(
-                input_ids=torch.tensor([[first_id]], device=thinker.device),
-                past_key_values=past_kv,
-                max_new_tokens=max_new_tokens_per_round - 1,
-                do_sample=(temperature > 0),
-                temperature=temperature if temperature > 0 else None,
-                stopping_criteria=StoppingCriteriaList([stopping]),
-                use_cache=True,
-                return_dict_in_generate=True,
+            gen_ids, past_kv, _stop = _decode_loop(
+                thinker, first_id, past_kv,
+                torch.ones(1, input_ids.shape[1], dtype=torch.long, device=thinker.device),
+                max_new_tokens_per_round, tokenizer, temperature, thinker.device,
             )
-            gen_ids = output.sequences[0].tolist()
-            past_kv = output.past_key_values
         else:
-            # ROUND 2+: insert new segment audio into KV cache, then generate
+            # ROUND 2+: insert new segment audio into KV cache, then decode
             if not used_segments:
                 print("  No segments to insert, ending")
                 break
@@ -419,21 +410,14 @@ def run_interleaved_custom(model, processor, audio_path, question, choices,
                 seg_input_features, seg_fam,
             )
 
-            # Generate from the inserted position
+            # Decode from the inserted position with attention_mask
             first_id = _sample_token(insert_logits[0, -1, :], temperature)
-            stopping = SegAnswerStoppingCriteria(tokenizer)
-            output = thinker.generate(
-                input_ids=torch.tensor([[first_id]], device=thinker.device),
-                past_key_values=past_kv,
-                max_new_tokens=max_new_tokens_per_round - 1,
-                do_sample=(temperature > 0),
-                temperature=temperature if temperature > 0 else None,
-                stopping_criteria=StoppingCriteriaList([stopping]),
-                use_cache=True,
-                return_dict_in_generate=True,
+            # seq_len = current KV cache length (prefill + gen + insertion)
+            gen_ids, past_kv, _stop = _decode_loop(
+                thinker, first_id, past_kv,
+                None,  # will be computed from cache length
+                max_new_tokens_per_round, tokenizer, temperature, thinker.device,
             )
-            gen_ids = output.sequences[0].tolist()
-            past_kv = output.past_key_values
 
         # ── End-of-round processing ──
         response_text = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
@@ -594,19 +578,15 @@ def run_interleaved_custom(model, processor, audio_path, question, choices,
         fin_ids = tokenizer.encode(finalize_text, add_special_tokens=False)
         fin_tensor = torch.tensor([fin_ids], device=thinker.device)
 
-        stopping = SegAnswerStoppingCriteria(tokenizer)
-        fin_output = thinker.generate(
-            input_ids=fin_tensor,
-            past_key_values=past_kv,
-            max_new_tokens=finalize_max_new_tokens,
-            do_sample=(temperature > 0),
-            temperature=temperature if temperature > 0 else None,
-            stopping_criteria=StoppingCriteriaList([stopping]),
-            use_cache=True,
-            return_dict_in_generate=True,
+        past_kv, fin_logits = _insert_and_prefill(
+            thinker, fin_tensor, past_kv, None, None,
         )
-        past_kv = fin_output.past_key_values
-        fin_gen_ids = fin_output.sequences[0, fin_tensor.shape[1]:].tolist()
+        first_id = _sample_token(fin_logits[0, -1, :], temperature)
+        fin_gen_ids, past_kv, _stop = _decode_loop(
+            thinker, first_id, past_kv,
+            None,
+            finalize_max_new_tokens, tokenizer, temperature, thinker.device,
+        )
 
         fin_response = tokenizer.decode(fin_gen_ids, skip_special_tokens=True).strip()
         round_elapsed = time.time() - t_start

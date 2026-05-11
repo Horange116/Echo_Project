@@ -439,3 +439,42 @@ Round 2+ 插入时，`continue_mode="assistant_append"` 只插入 `<|audio_bos|>
 - ❌ verl 集成（后续 Stage 2 用）
 - ❌ Reward model（直接用 rollout_reward）
 - ❌ 分布式 KL 估计（单机够用）
+
+## 19. 自定义循环性能问题分析（2026-05-11）
+
+### 问题
+自定义 KV-cache 循环的 token-by-token decode（`_decode_loop`）每次 `thinker()` 调用耗时 ~30s，导致每 sample 需要 ~53 分钟。
+
+### 根因
+Qwen2.5-Omni Thinker 模型的 direct `thinker()` forward 路径在 token-by-token decode 时可能存在以下问题：
+- `cache_position` 未显式传递时，position_ids 计算路径与 `model.generate()` 内部的优化路径不同
+- `_update_causal_mask` 在 direct forward 调用中会重新创建 4D causal mask（即使 attention_mask 正确传递）
+- `model.generate()` 内部有大量 CUDA graph / kernel 优化，direct `thinker()` 调用没有这些优化
+- 每次 Python 层 `thinker()` 调用的 kernel launch overhead 在 28 层 transformer 上被放大
+
+### 解决方案
+放弃 token-by-token decode，改用 `model.generate()` 做每个 round 的文本生成：
+
+```
+Round 1: model.generate() with full audio + prompt (proven fast: ~10-30 tok/s)
+Round 2+: 重建完整对话（含 full audio + assistant response + seg audio + continue prompt）
+          → processor 处理所有 audios → model.generate()
+Finalization: 同上，用 finalize prompt
+```
+
+**优点**: `model.generate()` 已验证稳定工作，速度快（单次生成 ~10-30 tok/s）
+**代价**: 每轮重新处理完整音频（~2-3s/轮），5 轮约 ~50s/sample，仍远快于 53 min/sample
+
+### KV cache 的价值保留
+KV cache 插入（`_insert_and_prefill`）已验证可以正确工作。后续如果需要优化，可以：
+1. Round 1：`model.generate()` 正常生成，保存 past_key_values
+2. Round 2+：`_insert_and_prefill` 插入 seg audio 到 KV cache → `model.generate(past_key_values=...)` 从 cache 生成
+3. 需要验证 `model.generate()` with `past_key_values` 是否稳定工作
+
+### 当前状态（2026-05-11）
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| `_decode_loop` (token-by-token) | ❌ 放弃 | ~30s/token，不可用 |
+| `model.generate()` + conversation reconstruction | ⏳ 待测试 | 预计 ~50s/sample |
+| KV cache audio insert + `model.generate()` | ⏳ 待验证 | 需要测试 past_key_values 兼容性 |
+| `_insert_and_prefill` | ✅ 已验证 | thinker() mini-prefill with audio features 正确工作 |
