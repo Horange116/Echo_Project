@@ -31,6 +31,8 @@ from peft import PeftModel
 from transformers import (
     Qwen2_5OmniForConditionalGeneration,
     Qwen2_5OmniProcessor,
+    StoppingCriteria,
+    StoppingCriteriaList,
 )
 
 # ── constants and helpers (self-contained) ──
@@ -41,6 +43,23 @@ THINK_ANSWER_PATTERN = re.compile(
     re.S,
 )
 SAMPLE_RATE = 16000
+
+
+class SegAnswerStoppingCriteria(StoppingCriteria):
+    """Stop generation when </seg> or </answer> appears in generated text."""
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.stop_reason = None
+
+    def __call__(self, input_ids, scores, **kwargs):
+        text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+        if "</answer>" in text:
+            self.stop_reason = "answer"
+            return True
+        if "</seg>" in text:
+            self.stop_reason = "seg"
+            return True
+        return False
 
 
 def segments_iou(a_start, a_end, b_start, b_end):
@@ -336,25 +355,27 @@ def run_interleaved_custom(model, processor, audio_path, question, choices,
 
         # ── Generate ──
         if round_idx == 0:
-            # ROUND 1: prefill + decode
+            # ROUND 1: prefill + thinker.generate() for fast decoding
             past_kv, prefill_logits = _prefill(
                 thinker, input_ids, input_features, feature_attention_mask
             )
             first_id = _sample_token(prefill_logits[0, -1, :], temperature)
-            gen_ids = [first_id]
 
-            for _ in range(1, max_new_tokens_per_round):
-                next_input = torch.tensor([[gen_ids[-1]]], device=thinker.device)
-                next_id, past_kv = _decode_one(thinker, next_input, past_kv)
-                gen_ids.append(next_id)
-
-                text_so_far = tokenizer.decode(gen_ids, skip_special_tokens=False)
-                if "</seg>" in text_so_far:
-                    break
-                if "</answer>" in text_so_far:
-                    break
+            stopping = SegAnswerStoppingCriteria(tokenizer)
+            output = thinker.generate(
+                input_ids=torch.tensor([[first_id]], device=thinker.device),
+                past_key_values=past_kv,
+                max_new_tokens=max_new_tokens_per_round - 1,
+                do_sample=(temperature > 0),
+                temperature=temperature if temperature > 0 else None,
+                stopping_criteria=StoppingCriteriaList([stopping]),
+                use_cache=True,
+                return_dict_in_generate=True,
+            )
+            gen_ids = output.sequences[0].tolist()
+            past_kv = output.past_key_values
         else:
-            # ROUND 2+: insert new segment audio into KV cache, then decode
+            # ROUND 2+: insert new segment audio into KV cache, then generate
             if not used_segments:
                 print("  No segments to insert, ending")
                 break
@@ -369,41 +390,50 @@ def run_interleaved_custom(model, processor, audio_path, question, choices,
                 processor, thinker, seg_audio, sample_rate
             )
 
-            # Build new token sequence: <|audio_bos|> <AUDIO>×N <|audio_eos|> [continue_prompt]
+            # Build tokens: <|audio_bos|> <AUDIO>×N <|audio_eos|> [optional continue prompt]
             audio_placeholder = torch.full(
                 (1, num_audio_tokens), audio_token_id, device=thinker.device
             )
-            continue_text = build_continue_prompt()
-            cont_ids = tokenizer.encode(continue_text, add_special_tokens=False)
-            cont_tensor = torch.tensor([cont_ids], device=thinker.device)
             bos_tensor = torch.tensor([[audio_bos_id]], device=thinker.device)
             eos_tensor = torch.tensor([[audio_eos_id]], device=thinker.device)
-            new_ids = torch.cat([
-                bos_tensor, audio_placeholder, eos_tensor, cont_tensor
-            ], dim=1)
 
-            print(f"  Inserting seg [{last_seg['start']:.2f}, {last_seg['end']:.2f}] "
-                  f"({num_audio_tokens} audio tokens + {len(cont_ids)} text tokens)")
+            if continue_mode in ("silent", "assistant_append"):
+                # Paper-style: only append audio, no prompt text
+                # x ← x ⊕ ô ⊕ A_s:e
+                new_ids = torch.cat([bos_tensor, audio_placeholder, eos_tensor], dim=1)
+                print(f"  Inserting seg [{last_seg['start']:.2f}, {last_seg['end']:.2f}] "
+                      f"({num_audio_tokens} audio tokens) — {continue_mode}")
+            else:
+                # Audio + continue prompt (default: "prompt")
+                continue_text = build_continue_prompt()
+                cont_ids = tokenizer.encode(continue_text, add_special_tokens=False)
+                cont_tensor = torch.tensor([cont_ids], device=thinker.device)
+                new_ids = torch.cat([
+                    bos_tensor, audio_placeholder, eos_tensor, cont_tensor
+                ], dim=1)
+                print(f"  Inserting seg [{last_seg['start']:.2f}, {last_seg['end']:.2f}] "
+                      f"({num_audio_tokens} audio tokens + {len(cont_ids)} text tokens)")
 
             past_kv, insert_logits = _insert_and_prefill(
                 thinker, new_ids, past_kv,
                 seg_input_features, seg_fam,
             )
 
-            # Decode from the inserted position
+            # Generate from the inserted position
             first_id = _sample_token(insert_logits[0, -1, :], temperature)
-            gen_ids = [first_id]
-
-            for _ in range(1, max_new_tokens_per_round):
-                next_input = torch.tensor([[gen_ids[-1]]], device=thinker.device)
-                next_id, past_kv = _decode_one(thinker, next_input, past_kv)
-                gen_ids.append(next_id)
-
-                text_so_far = tokenizer.decode(gen_ids, skip_special_tokens=False)
-                if "</seg>" in text_so_far:
-                    break
-                if "</answer>" in text_so_far:
-                    break
+            stopping = SegAnswerStoppingCriteria(tokenizer)
+            output = thinker.generate(
+                input_ids=torch.tensor([[first_id]], device=thinker.device),
+                past_key_values=past_kv,
+                max_new_tokens=max_new_tokens_per_round - 1,
+                do_sample=(temperature > 0),
+                temperature=temperature if temperature > 0 else None,
+                stopping_criteria=StoppingCriteriaList([stopping]),
+                use_cache=True,
+                return_dict_in_generate=True,
+            )
+            gen_ids = output.sequences[0].tolist()
+            past_kv = output.past_key_values
 
         # ── End-of-round processing ──
         response_text = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
@@ -564,26 +594,19 @@ def run_interleaved_custom(model, processor, audio_path, question, choices,
         fin_ids = tokenizer.encode(finalize_text, add_special_tokens=False)
         fin_tensor = torch.tensor([fin_ids], device=thinker.device)
 
-        with torch.no_grad():
-            outputs = thinker(
-                input_ids=fin_tensor,
-                past_key_values=past_kv,
-                use_cache=True,
-            )
-        past_kv = outputs.past_key_values
-
-        fin_first = _sample_token(outputs.logits[0, -1, :], temperature)
-        fin_gen_ids = [fin_first]
-
-        for _ in range(1, finalize_max_new_tokens):
-            next_input = torch.tensor([[fin_gen_ids[-1]]], device=thinker.device)
-            next_id, past_kv = _decode_one(thinker, next_input, past_kv)
-            fin_gen_ids.append(next_id)
-            text_so_far = tokenizer.decode(fin_gen_ids, skip_special_tokens=False)
-            if "</answer>" in text_so_far:
-                break
-            if tokenizer.eos_token_id is not None and next_id == tokenizer.eos_token_id:
-                break
+        stopping = SegAnswerStoppingCriteria(tokenizer)
+        fin_output = thinker.generate(
+            input_ids=fin_tensor,
+            past_key_values=past_kv,
+            max_new_tokens=finalize_max_new_tokens,
+            do_sample=(temperature > 0),
+            temperature=temperature if temperature > 0 else None,
+            stopping_criteria=StoppingCriteriaList([stopping]),
+            use_cache=True,
+            return_dict_in_generate=True,
+        )
+        past_kv = fin_output.past_key_values
+        fin_gen_ids = fin_output.sequences[0, fin_tensor.shape[1]:].tolist()
 
         fin_response = tokenizer.decode(fin_gen_ids, skip_special_tokens=True).strip()
         round_elapsed = time.time() - t_start
@@ -696,8 +719,10 @@ def main():
     parser.add_argument("--finalize_max_new_tokens", type=int, default=64)
     parser.add_argument("--gold_answer", default=None)
     parser.add_argument("--continue_mode", default="prompt",
-                        choices=["prompt", "silent", "context"],
-                        help="Continue mode (silent/context modes not supported in custom loop)")
+                        choices=["prompt", "silent", "context", "assistant_append"],
+                        help="Round 2+ insertion mode. prompt=audio+text, "
+                             "silent=audio-only(no text), "
+                             "assistant_append=audio appended to assistant context (paper style)")
 
     args = parser.parse_args()
     choices = json.loads(args.choices)

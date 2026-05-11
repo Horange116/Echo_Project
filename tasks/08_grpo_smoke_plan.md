@@ -391,7 +391,48 @@ v9b-2epoch checkpoint 在 interleaved 推理下的 base behavior 是"找一个 s
 - `position_ids` / `cache_position` 未显式传递，RoPE 位置可能不精确（但在短序列上影响不大）
 - `continue_mode` 暂时只支持 "prompt"（silent/context 需要不同的 KV cache 插入策略）
 
-## 16. 先不做的（后续扩展）
+## 16. 自定义循环 Job 41825 测试结果（2026-05-11）
+
+### 结果
+| 指标 | 值 |
+|------|-----|
+| Job | 41825, TIMEOUT 8:00:16 |
+| 完成 | 9/43 条 |
+| 平均速度 | **~53 min/条** |
+| 生成 `<seg>` | **0/9** |
+| 保存 results.json | ❌（超时在最终写入前） |
+
+### 核心问题
+
+**性能 bug**: `_decode_one()` 每步 ~30s，KV cache 可能未生效，逐 token decode 在重复计算全部历史。
+
+**Seg 生成**: 旧版自定义循环的逐 token 解码 + `skip_special_tokens=False` 的检测方式与原始 `SegStoppingCriteria` 行为不一致，导致模型从不生成 `<seg>` 就直接出 `</answer>` 或空响应。
+
+### 修复（2026-05-11）
+
+1. **性能**: 删除 `_decode_one()` 的 Python for 循环，改用 `thinker.generate()` + `SegAnswerStoppingCriteria`（与原始 `interleaved_infer.py` 一致的 stopping criteria）
+2. **三个 decode 路径全部替换**:
+   - Round 1: `thinker.forward()` prefill → `thinker.generate()` decode
+   - Round 2+: `_insert_and_prefill()` KV cache 追加 → `thinker.generate()` decode
+   - Finalization: `thinker.generate()` decode
+
+## 17. `--continue_mode assistant_append`（2026-05-11）
+
+### 原理
+论文 `x ← x ⊕ ô ⊕ A_s:e` 要求将音频嵌入**直接追加到序列末尾**，而不是作为新 user turn。在 Qwen2.5-Omni 中，processor 不支持在 assistant 消息里放 audio，只能通过 token/embedding 层操作。
+
+### 实现
+Round 2+ 插入时，`continue_mode="assistant_append"` 只插入 `<|audio_bos|> <AUDIO>×N <|audio_eos|>`，不加任何 `build_continue_prompt()` 文字。这与 KV cache 追加的机制一致，区别仅在于继续 prompt 的有无。
+
+### 三种 Round 2 策略对比
+
+| 模式 | KV cache 追加内容 | 效果 |
+|------|-------------------|------|
+| `prompt` | audio + "Continue your reasoning..." | 新 user turn，打断推理流 |
+| `silent` | audio（无文字） | 同 `assistant_append`（自定义循环中） |
+| `assistant_append` | audio（无文字，直接续在 KV cache 末尾） | 符合论文 `x ← x ⊕ ô ⊕ A_s:e` |
+
+## 18. 先不做的（后续扩展）
 
 - ❌ vLLM 加速生成（smoke 不需要）
 - ❌ 多 GPU / DeepSpeed（1 GPU smoke）
