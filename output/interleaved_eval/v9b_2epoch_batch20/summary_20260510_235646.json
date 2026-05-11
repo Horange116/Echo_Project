@@ -1,0 +1,222 @@
+[
+  {
+    "id": "--ajzZwHQn8_21000:duration_percentage",
+    "correct": null,
+    "pred": "",
+    "gold": "25%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 98.1
+  },
+  {
+    "id": "-58o5dDbWDA_310000:start_percentage",
+    "correct": null,
+    "pred": "",
+    "gold": "95%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 19.3
+  },
+  {
+    "id": "-6vtoRoZCAU_30000:duration_percentage",
+    "correct": false,
+    "pred": "3.0%",
+    "gold": "20%",
+    "rounds": 5,
+    "unique_segs": 0,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 17.3
+  },
+  {
+    "id": "-4ObGigN498_50000:start_percentage",
+    "correct": null,
+    "pred": "",
+    "gold": "10%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 75.4
+  },
+  {
+    "id": "-AgL2NWp9bc_30000:order",
+    "correct": null,
+    "pred": "",
+    "gold": "the first impact sounds",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 17.9
+  },
+  {
+    "id": "-PJPpA6J5ks_0:duration_percentage",
+    "correct": false,
+    "pred": "2.0 seconds",
+    "gold": "30%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 27.1
+  },
+  {
+    "id": "-TQILM-c0T0_30000:start_percentage",
+    "correct": false,
+    "pred": "100%",
+    "gold": "90%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 16.0
+  },
+  {
+    "id": "-b8Pmyz3JoM_30000:duration_percentage",
+    "correct": false,
+    "pred": "5%",
+    "gold": "25%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 14.1
+  },
+  {
+    "id": "-fKLFmdZXiA_20000:repeated_event_gap",
+    "correct": false,
+    "pred": "0.5 seconds",
+    "gold": "0.2 seconds",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 19.2
+  },
+  {
+    "id": "-cRjlU1MFnc_30000:start_percentage",
+    "correct": false,
+    "pred": "3.1 seconds",
+    "gold": "10%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 30.9
+  },
+  {
+    "id": "-ahUvb5VIOE_290000:overlap",
+    "correct": null,
+    "pred": "",
+    "gold": "3.7 seconds",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 12.3
+  },
+  {
+    "id": "-kc9G-8a9do_30000:count_before",
+    "correct": null,
+    "pred": "",
+    "gold": "2",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 10.7
+  },
+  {
+    "id": "-n8GnPW8M28_30000:order",
+    "correct": null,
+    "pred": "",
+    "gold": "the first impact sounds",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 15.9
+  },
+  {
+    "id": "-mGX2wYBZlY_70000:duration_compare",
+    "correct": null,
+    "pred": "",
+    "gold": "the first shatter",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 19.2
+  },
+  {
+    "id": "-nWUVq5s7cM_30000:duration_percentage",
+    "correct": null,
+    "pred": "",
+    "gold": "85%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 22.3
+  },
+  {
+    "id": "-gFZWpk2Zcw_30000:start_percentage",
+    "correct": null,
+    "pred": "",
+    "gold": "5%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 26.0
+  },
+  {
+    "id": "-qBi7gpPM-w_290000:duration_percentage",
+    "correct": false,
+    "pred": "5.4 seconds",
+    "gold": "25%",
+    "rounds": 4,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "has_answer",
+    "elapsed": 17.3
+  },
+  {
+    "id": "-uwz9V13Svc_18000:duration_percentage",
+    "correct": null,
+    "pred": "",
+    "gold": "20%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 22.9
+  },
+  {
+    "id": "03yHjGd5Y6c_40000:start_percentage",
+    "correct": false,
+    "pred": "10%",
+    "gold": "0%",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 26.2
+  },
+  {
+    "id": "-q2cAxoCZ4w_30000:count_before",
+    "correct": null,
+    "pred": "",
+    "gold": "1",
+    "rounds": 5,
+    "unique_segs": 1,
+    "dup_segs": 0,
+    "stop": "max_rounds",
+    "elapsed": 10.2
+  }
+]

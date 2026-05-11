@@ -1,0 +1,104 @@
+{
+  "model_path": "/hpai/aios3.0/private/user/s2025244189/s2025244265/Model_Env/Qwen2.5-Omni-7B/",
+  "adapter_path": "/hpai/aios3.0/private/user/s2025244189/s2025244265/Projects/Echo_Project/output/testResult/v9b-diverse-cot-2epoch-20260509-103234/v0-20260509-103317/checkpoint-3078",
+  "test_jsonl": "/hpai/aios3.0/private/user/s2025244189/s2025244180/Dataset/MMAR/sft/mmar_all.jsonl",
+  "generation_config": {
+    "max_new_tokens": 1024,
+    "batch_size": 8
+  },
+  "prompt_format": "paper_appendix_E2",
+  "timestamp": "20260510-153303",
+  "num_samples": 1000,
+  "strict_acc": 0.288,
+  "fallback_acc": 0.344,
+  "strict_correct": 288,
+  "fallback_correct": 344,
+  "total": 1000,
+  "has_think_answer": 0.672,
+  "has_answer_tag": 0.703,
+  "has_seg": 0.722,
+  "answer_in_choices": 0.621,
+  "pred_not_in_choices": 82,
+  "failed": 0,
+  "by_category": {
+    "Cultural Layer": {
+      "total": 141,
+      "strict_acc": 0.3333333333333333,
+      "fallback_acc": 0.40425531914893614,
+      "strict_correct": 47,
+      "fallback_correct": 57
+    },
+    "Perception Layer": {
+      "total": 404,
+      "strict_acc": 0.2698019801980198,
+      "fallback_acc": 0.297029702970297,
+      "strict_correct": 109,
+      "fallback_correct": 120
+    },
+    "Semantic Layer": {
+      "total": 412,
+      "strict_acc": 0.28883495145631066,
+      "fallback_acc": 0.3713592233009709,
+      "strict_correct": 119,
+      "fallback_correct": 153
+    },
+    "Signal Layer": {
+      "total": 43,
+      "strict_acc": 0.3023255813953488,
+      "fallback_acc": 0.32558139534883723,
+      "strict_correct": 13,
+      "fallback_correct": 14
+    }
+  },
+  "by_modality": {
+    "mix-music-speech": {
+      "total": 82,
+      "strict_acc": 0.34146341463414637,
+      "fallback_acc": 0.4146341463414634,
+      "strict_correct": 28,
+      "fallback_correct": 34
+    },
+    "mix-sound-music": {
+      "total": 11,
+      "strict_acc": 0.18181818181818182,
+      "fallback_acc": 0.18181818181818182,
+      "strict_correct": 2,
+      "fallback_correct": 2
+    },
+    "mix-sound-music-speech": {
+      "total": 24,
+      "strict_acc": 0.20833333333333334,
+      "fallback_acc": 0.2916666666666667,
+      "strict_correct": 5,
+      "fallback_correct": 7
+    },
+    "mix-sound-speech": {
+      "total": 218,
+      "strict_acc": 0.3348623853211009,
+      "fallback_acc": 0.41743119266055045,
+      "strict_correct": 73,
+      "fallback_correct": 91
+    },
+    "music": {
+      "total": 206,
+      "strict_acc": 0.28640776699029125,
+      "fallback_acc": 0.32038834951456313,
+      "strict_correct": 59,
+      "fallback_correct": 66
+    },
+    "sound": {
+      "total": 165,
+      "strict_acc": 0.2606060606060606,
+      "fallback_acc": 0.2606060606060606,
+      "strict_correct": 43,
+      "fallback_correct": 43
+    },
+    "speech": {
+      "total": 294,
+      "strict_acc": 0.2653061224489796,
+      "fallback_acc": 0.3435374149659864,
+      "strict_correct": 78,
+      "fallback_correct": 101
+    }
+  }
+}
