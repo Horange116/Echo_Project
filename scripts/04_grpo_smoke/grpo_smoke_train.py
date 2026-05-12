@@ -41,6 +41,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+import gc
+
 import numpy as np
 import torch
 from peft import PeftModel
@@ -113,7 +115,7 @@ def load_policy_model(
     )
     model = PeftModel.from_pretrained(base, adapter_path, is_trainable=True)
     model.base_model.disable_talker()
-    model = model.to("cuda:0")
+    model = model.to("cuda:0", dtype=torch.float16)
 
     # Freeze everything except LoRA parameters
     for n, p in model.named_parameters():
@@ -132,17 +134,19 @@ def load_policy_model(
 def load_reference_model(
     model_path: str,
     adapter_path: str,
+    device: torch.device = torch.device("cuda"),
 ) -> PeftModel:
-    """Load a frozen reference model on CPU to save GPU memory."""
+    """Load a frozen reference model on the target device."""
     os.environ["QWEN_OMNI_SKIP_SPK"] = "1"
     base = Qwen2_5OmniForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.float16,
         device_map=None,
         low_cpu_mem_usage=True,
-    ).cpu()
+    )
     model = PeftModel.from_pretrained(base, adapter_path)
     model.base_model.disable_talker()
+    model = model.to(device, dtype=torch.float16)
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
@@ -302,10 +306,10 @@ def main() -> None:
     )
     print(f"  Policy model loaded in {time.time() - t0:.1f}s")
 
-    # Reference model (same checkpoint, frozen)
+    # Reference model (same checkpoint, frozen, kept on GPU throughout)
     print(f"[{datetime.now()}] Loading reference model ...")
     t0 = time.time()
-    ref_model = load_reference_model(args.model_path, args.adapter_path)
+    ref_model = load_reference_model(args.model_path, args.adapter_path, device)
     print(f"  Reference model loaded in {time.time() - t0:.1f}s")
 
     # ── load data ──
@@ -392,6 +396,12 @@ def main() -> None:
             # Free GPU memory from rollout audio/generation artefacts
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
+            gc.collect()
+
+            # Switch to train mode and keep it throughout Phase 3–5.
+            # This avoids a CUDA state corruption seen when calling thinker()
+            # in eval mode after many generate() calls, then switching to train.
+            policy_model.train()
 
             # ════════════════════════════════════════════
             # Phase 2: Compute rewards
@@ -407,49 +417,73 @@ def main() -> None:
                 all_metrics.append(parse_rollout_metrics(result, sample, rew))
 
             # ════════════════════════════════════════════
-            # Phase 3: Text-approximate log-probs (old policy + reference)
+            # Phase 3+5: Text log-probs + GRPO loss + update
             # ════════════════════════════════════════════
+            # Build batched inputs for all rollouts, then run a SINGLE
+            # thinker() forward per model.  This avoids the CUDA error
+            # triggered by 14+ separate forward() calls on the thinker
+            # with gradient tracking enabled.
             text_pairs: List[Tuple[str, str]] = []
             for result, sample in all_results:
                 prompt = build_text_prompt(sample["question"], sample.get("choices", []))
                 completion = result.get("final_response", "")
                 text_pairs.append((prompt, completion))
 
-            old_logps_list: List[torch.Tensor] = []
-            ref_logps_list: List[torch.Tensor] = []
-            masks_list: List[torch.Tensor] = []
+            # Encode all pairs
+            tokenizer = processor.tokenizer
+            encoded = []  # (full_ids, seq_len, prompt_len)
+            max_seq_len = 0
+            for prompt, completion in text_pairs:
+                prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+                full_ids = prompt_ids + tokenizer.encode(completion, add_special_tokens=False)
+                if len(full_ids) > args.max_text_length:
+                    full_ids = full_ids[:args.max_text_length]
+                seq_len = len(full_ids)
+                max_seq_len = max(max_seq_len, seq_len)
+                encoded.append((full_ids, seq_len, len(prompt_ids)))
 
-            # Move reference model to GPU only for this phase
-            ref_model = ref_model.to(device)
+            # Pad to max_seq_len × B
+            B = len(encoded)
+            padded_ids = torch.zeros((B, max_seq_len), dtype=torch.long, device=device)
+            padded_attn = torch.zeros((B, max_seq_len), dtype=torch.long, device=device)
+            padded_cmask = torch.zeros((B, max_seq_len - 1), dtype=torch.float, device=device)
+            for i, (full_ids, seq_len, prompt_len) in enumerate(encoded):
+                padded_ids[i, :seq_len] = torch.tensor(full_ids, dtype=torch.long, device=device)
+                padded_attn[i, :seq_len] = 1
+                # completion_mask (shifted): position t predicts token t+1
+                # Completion starts at prompt_len, so mask positions [prompt_len-1 .. seq_len-2]
+                if seq_len - 1 > prompt_len - 1:
+                    padded_cmask[i, prompt_len - 1: seq_len - 1] = 1.0
+
+            policy_model.train()
+            optimizer.zero_grad()
+
+            gc.collect()
             torch.cuda.synchronize()
 
+            # Single batched forward — policy (with grad)
+            try:
+                policy_logps_padded = get_per_token_logps(
+                    policy_model, padded_ids, padded_attn
+                )
+            except RuntimeError as e:
+                print(f"\n  [Batched ERROR] policy_model logps:")
+                print(f"    padded_ids shape: {padded_ids.shape} device: {padded_ids.device}")
+                print(f"    padded_attn shape: {padded_attn.shape} device: {padded_attn.device}")
+                for n, p in policy_model.named_parameters():
+                    if p.requires_grad:
+                        print(f"    LoRA param {n}: dtype={p.dtype} device={p.device} isnan={torch.isnan(p).any()} isinf={torch.isinf(p).any()}")
+                raise
+
+            old_logps_padded = policy_logps_padded.detach()
+
+            # Single batched forward — reference (no grad)
             with torch.no_grad():
-                for prompt, completion in text_pairs:
-                    inputs = build_text_inputs(
-                        tokenizer, prompt, completion,
-                        max_length=args.max_text_length,
-                        device=device,
-                    )
-                    old_lp = get_per_token_logps(
-                        policy_model, inputs["input_ids"], inputs["attention_mask"]
-                    )
-                    ref_lp = get_per_token_logps(
-                        ref_model, inputs["input_ids"], inputs["attention_mask"]
-                    )
-                    old_logps_list.append(old_lp)
-                    ref_logps_list.append(ref_lp)
-                    masks_list.append(inputs["completion_mask"])
+                ref_logps_padded = get_per_token_logps(
+                    ref_model, padded_ids, padded_attn
+                )
 
-            # Move reference model back to CPU to free GPU memory
-            ref_model = ref_model.to("cpu")
-            torch.cuda.empty_cache()
-
-            # Pad to same length
-            max_len = max(lp.shape[-1] for lp in old_logps_list)
-            old_logps_padded = pad_and_stack(old_logps_list, max_len)
-            ref_logps_padded = pad_and_stack(ref_logps_list, max_len)
-            masks_padded = pad_and_stack(masks_list, max_len, pad_value=0.0)
-            masks_padded = (masks_padded > 0).float()
+            masks_padded = padded_cmask
 
             # ════════════════════════════════════════════
             # Phase 4: Advantages
@@ -459,25 +493,8 @@ def main() -> None:
             advantages = compute_advantages(rollout_totals, group_ids).to(device)
 
             # ════════════════════════════════════════════
-            # Phase 5: GRPO loss + update
+            # Loss + backward + step
             # ════════════════════════════════════════════
-            policy_model.train()
-            optimizer.zero_grad()
-
-            policy_logps_list: List[torch.Tensor] = []
-            for prompt, completion in text_pairs:
-                inputs = build_text_inputs(
-                    tokenizer, prompt, completion,
-                    max_length=args.max_text_length,
-                    device=device,
-                )
-                lp = get_per_token_logps(
-                    policy_model, inputs["input_ids"], inputs["attention_mask"]
-                )
-                policy_logps_list.append(lp)
-
-            policy_logps_padded = pad_and_stack(policy_logps_list, max_len)
-
             loss_dict = compute_grpo_loss(
                 policy_logps_padded,
                 old_logps_padded,

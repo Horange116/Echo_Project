@@ -603,3 +603,46 @@ RL 数据集从 44 条扩至 **129 条**（3x），重新从 `judged_subset_600_
 - max_rounds=10, max_new_tokens=256, finalize_max_new_tokens=64
 - 预估: ~7 小时
 
+## 22. CUDA driver error: invalid argument — Phase 3/5 thinker 崩溃（2026-05-12）
+
+### 问题
+GRPO 训练的 Phase 3（text-only log-prob 计算）和 Phase 5（有 grad 的 policy forward）中，调用 `model.get_base_model().thinker()` 做 text-only forward 时触发 `RuntimeError: CUDA driver error: invalid argument`。错误位置在 LoRA 线性层 `F.linear(input, self.weight, self.bias)`，每次重现位置不同但都在 14+ 次 forward 后。
+
+### 崩溃记录
+
+| Job | Phase | 崩溃位置 | 修复尝试 | 结果 |
+|-----|-------|---------|---------|------|
+| 41924 | Phase 3 | 首次 old_logps 调用 | — | ❌ |
+| 41925 | Phase 3 | 首次 old_logps 调用 | 加 `torch.cuda.synchronize()` | ❌ |
+| 41926 | Phase 5 | pair 0（首次） | ref_model 常驻 GPU | ❌（Phase 3 通过，Phase 5 在 pair 0 崩溃） |
+| 41927 | Phase 5 | pair 11 | `train()` 模式贯穿 Phase 3-5 | ❌（Phase 3 64 次 forward 全通，Phase 5 pair 11 崩溃） |
+| 41928 | Phase 5 | pair 14 | LoRA dtype 从 float32→float16 | ❌（dtype 确认修复，Phase 5 继续崩溃于 pair 14） |
+| 41929 | Phase 3+5 合并 | pair 14 | 合并为单循环 + train 模式 | ❌（pair 14 仍崩溃） |
+| 41930 | Phase 3+5 合并（限 8 pair） | ✅ **成功** | 仅处理 8 个 pair | ✅ Phase 5 forward 通过 |
+| 41930 | Phase 3+5 合并（限 8 pair） | compute_grpo_loss | shape 不匹配（调试限制导致） | ❌（非 CUDA 错误） |
+| 41931 | Phase 3+5 合并（32 pair） | pair 14 | 同上 | ❌（确定是累计调用次数问题） |
+
+### 确定性结论
+1. **LoRA dtype float32 ↔ base model float16 不匹配** — ✅ 已修复。诊断确认修复后 LoRA 参数为 float16
+2. **14+ 次 `thinker()` forward（有 grad）后 CUDA 状态损坏** — 每次 Phase 3（`no_grad`）都能跑完全部 64 次 forward，但 Phase 5（有 grad）或合并循环（有 grad）总是在第 14 次附近崩溃
+3. **Phase 3 在 `no_grad` 下 64 次全部成功** — 说明 `no_grad` 模式下 thinker forward 路径不同，不会触发该错误
+4. **8 次有 grad 的 forward 全部通过**（Job 41930）— 确认限制在约 14 次
+
+### 尝试过的修复（均无效）
+- `torch.cuda.synchronize()` + `empty_cache()` 清理
+- `gc.collect()` 回收 Python 对象
+- ref_model 常驻 GPU（消除 Phase 1→3 的大块内存重分配）
+- `train()` 模式贯穿 Phase 3-5（避免 eval→train 切换）
+- LoRA 参数统一为 float16
+- Phase 3+5 合并为单次循环（avoid no_grad→grad transition）
+
+### 根因推测
+`model.get_base_model().thinker()` 直接在 LoRA-monkey-patched 的子模块上做带 grad tracking 的 forward。每次调用构造 autograd 图，不同序列长度导致 CUDA 反复分配/释放不同大小的 tensor，约 14 次后 CUDA 内存分配器状态损坏，触发 `invalid argument`。
+
+该错误仅在 `train()` + 有 grad 模式下出现，`no_grad()` 或 `eval()` 模式下不出现。
+
+### 待验证的修复方向
+1. **Batch 所有序列为单次 forward**（代码已改好，未运行）：32 个 rollout 的 text 拼成一个 (32, max_T) 的 padded batch，只调用 1 次 `thinker()`（有 grad）+ 1 次 ref（no_grad），彻底避免累计调用问题
+2. **改用 `model.generate()` 的 byproduct 获取 log-probs**：不在 Phase 3+5 重新 forward，而是从 rollout 生成过程中保存每步 logits
+3. **直接操作 timeline：不涉及thinker，用 rollout generation 的过程变量计算 log-probs**
+
