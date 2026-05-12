@@ -646,3 +646,37 @@ GRPO 训练的 Phase 3（text-only log-prob 计算）和 Phase 5（有 grad 的 
 2. **改用 `model.generate()` 的 byproduct 获取 log-probs**：不在 Phase 3+5 重新 forward，而是从 rollout 生成过程中保存每步 logits
 3. **直接操作 timeline：不涉及thinker，用 rollout generation 的过程变量计算 log-probs**
 
+## 23. GRPO per-token log-prob 必要性分析（2026-05-12）
+
+### 核心结论
+
+GRPO 训练无法绕过对 completion 的重新 forward，原因：
+
+```
+GRPO loss:  -min(ratio × adv, clip(ratio) × adv) + β × KL
+
+ratio(token_t) = exp(log πθ(token_t) - log πold(token_t))
+KL(token_t)    = exp(log πref - log πθ) - (log πref - log πθ) - 1
+```
+
+- **advantage 是 rollout-level 共享的**（同一个 group 内所有 rollout 标准化后的 z-score 作用到每个 token）
+- **ratio 是 per-token 的**（每个 token 在 πθ 和 πold 下的概率比不同），所以 per-token log-prob 仍然必要
+- **KL 是 per-token 的**，需要 πθ 和 πref 每个位置的 log-prob
+- 不能简化为 sequence-level ratio（会变成另一个算法，长序列数值不稳定）
+
+### 三个 log-prob 来源
+
+| 类型 | 用途 | 能否从 generate 获取 | 是否必须 forward |
+|------|------|:---:|:---:|
+| πold (old policy logps) | ratio 分母 | ✅ `output_scores=True` 可获取 | 可省 |
+| πθ (current policy logps) | ratio 分子，需要梯度 | ❌ generate 不提供梯度 | ✅ 必须 |
+| πref (reference logps) | KL 惩罚 | ❌ 不同模型 | ✅ 必须 |
+
+### audio token mask
+
+插入的 seg 音频 token（`<|audio_bos|>...<|audio_eos|>`）不是模型生成的，在 GRPO loss 中必须用 `completion_mask` 排除，否则模型会对环境注入的 token 产生梯度更新。
+
+### 解决方案
+
+**Batched forward**（当前实现）：32 个 rollout 的 prompt+completion 序列拼成 (32, max_T) padded batch，πθ forward 1 次（有 grad），πref forward 1 次（no grad），πold = πθ.detach()。总共 2 次 `thinker()` 调用替代原来的 64 次。
+
