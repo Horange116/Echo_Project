@@ -157,15 +157,15 @@ def load_model_and_processor(model_path, adapter_path=None):
 
 # ── inference helpers ──
 
-def build_conversation(prompt, all_generated_text, used_segments, audio_full,
+def build_conversation(prompt, all_round_texts, used_segments, audio_full,
                        sample_rate, audio_list, round_idx, is_finalize,
                        continue_mode="prompt"):
     """Build the conversation for the current round.
 
     Round 1:  user message with full audio + prompt.
-    Round 2+: single user message with full audio + prompt + assistant
-              text + segment audios concatenated
-              (``x'_i = x_i ⊕ o ⊕ A_s:e``, no turn boundary).
+    Round 2+: single user message with interleaved text and audio segments:
+              [full_audio] [prompt] [R1_text] [R1_audio(s)] [R2_text] [R2_audio(s)] ...
+              (``x'_i = x_i ⊕ o_{r1} ⊕ A_{r1} ⊕ o_{r2} ⊕ A_{r2} ...``).
     Finalize: separate user + assistant messages for final answer.
     """
     if is_finalize:
@@ -178,10 +178,11 @@ def build_conversation(prompt, all_generated_text, used_segments, audio_full,
                 ],
             }
         ]
-        if all_generated_text.strip():
+        all_text = " ".join(all_round_texts) if all_round_texts else ""
+        if all_text.strip():
             conversation.append({
                 "role": "assistant",
-                "content": all_generated_text.strip(),
+                "content": all_text.strip(),
             })
         return conversation
 
@@ -196,19 +197,25 @@ def build_conversation(prompt, all_generated_text, used_segments, audio_full,
             }
         ]
 
-    # Round 2+: x'_i = x_i ⊕ o ⊕ A_s:e  — single user message, no turn boundary
-    combined_text = prompt
-    if all_generated_text.strip():
-        combined_text = prompt + "\n" + all_generated_text.strip()
-
+    # Round 2+: interleaved — text/audio alternated by round
     content = [
         {"type": "audio", "audio": audio_full},
-        {"type": "text", "text": combined_text},
+        {"type": "text", "text": prompt},
     ]
+
+    # Build round→segs index
+    segs_by_round = {}
     for seg_info in used_segments:
-        seg_audio, _ = librosa.load(seg_info["segment_path"], sr=sample_rate)
-        audio_list.append(seg_audio)
-        content.append({"type": "audio", "audio": seg_audio})
+        r = seg_info.get("round", 0)
+        segs_by_round.setdefault(r, []).append(seg_info)
+
+    for i, round_text in enumerate(all_round_texts):
+        round_num = i + 1  # 1-indexed
+        content.append({"type": "text", "text": round_text.strip()})
+        for seg_info in segs_by_round.get(round_num, []):
+            seg_audio, _ = librosa.load(seg_info["segment_path"], sr=sample_rate)
+            audio_list.append(seg_audio)
+            content.append({"type": "audio", "audio": seg_audio})
 
     return [{"role": "user", "content": content}]
 
@@ -330,7 +337,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
     prompt = build_initial_prompt(question, choices)
 
     # State
-    all_generated_text = ""
+    all_round_texts = []
     used_segments = []          # segments actually inserted
     detected_segments = []      # all segments seen (including duplicates)
     duplicate_segments_info = []  # details on duplicate detections
@@ -351,7 +358,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
         num_audios_before = len(audio_list) - 1  # exclude full audio
 
         conversation = build_conversation(
-            prompt, all_generated_text, used_segments,
+            prompt, all_round_texts, used_segments,
             audio_full, sample_rate, audio_list, round_idx,
             is_finalize=False, continue_mode=continue_mode,
         )
@@ -413,11 +420,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
                         "duplicate_iou": round(iou, 4),
                     })
 
-                    if all_generated_text:
-                        all_generated_text += " " + response
-                    else:
-                        all_generated_text = response
-
+                    all_round_texts.append(response)
                     seg_count += 1
                     stop_reason = "duplicate_seg"
                     break  # break out of seg loop
@@ -459,10 +462,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
             break
 
         # Update generated text
-        if all_generated_text:
-            all_generated_text += " " + response
-        else:
-            all_generated_text = response
+        all_round_texts.append(response)
 
         num_audios_after = len(audio_list) - 1
 
@@ -494,10 +494,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
                     "duplicate_of": {"start": s, "end": e},
                 })
             # Append text
-            if all_generated_text:
-                all_generated_text += " " + response
-            else:
-                all_generated_text = response
+            all_round_texts.append(response)
 
             # If stop policy is in effect, break on repeated segs
             if on_duplicate_seg == "stop":
@@ -605,10 +602,11 @@ def run_interleaved(model, processor, audio_path, question, choices,
                 ],
             }
         ]
-        if all_generated_text.strip():
+        all_text = " ".join(all_round_texts) if all_round_texts else ""
+        if all_text.strip():
             conversation.append({
                 "role": "assistant",
-                "content": all_generated_text.strip(),
+                "content": all_text.strip(),
             })
         conversation.append({
             "role": "user",
@@ -627,10 +625,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
         if has_answer(response):
             has_answer_ever = True
 
-        if all_generated_text:
-            all_generated_text += " " + response
-        else:
-            all_generated_text = response
+        all_round_texts.append(response)
 
         round_outputs.append({
             "round": "finalize",
@@ -647,6 +642,7 @@ def run_interleaved(model, processor, audio_path, question, choices,
         })
 
     # ── extract final answer ──
+    all_generated_text = " ".join(all_round_texts) if all_round_texts else ""
     pred_answer = extract_answer(all_generated_text)
     has_final_answer = bool(pred_answer)
 

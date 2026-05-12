@@ -90,6 +90,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--finalize_max_new_tokens", type=int, default=64)
     # log-prob text-only (max context length)
     p.add_argument("--max_text_length", type=int, default=2048)
+    # micro-batch forward (avoid CUDA OOM with large B×T)
+    p.add_argument("--policy_forward_micro_batch_size", type=int, default=4,
+                   help="Max batch size for a single policy thinker() forward (grad). "
+                        "Exp A shows bs<=4 is safe; bs>=8 crashes at T≈500.")
+    p.add_argument("--max_steps", type=int, default=-1,
+                   help="Stop after this many training steps (-1 = full dataset).")
+    p.add_argument("--max_samples", type=int, default=-1,
+                   help="Limit dataset to first N samples (-1 = use all).")
+    p.add_argument("--checkpoint_every", type=int, default=25,
+                   help="Save checkpoint every N steps.")
     return p.parse_args()
 
 
@@ -167,6 +177,9 @@ def load_dataset(path: str) -> List[dict]:
             line = line.strip()
             if line:
                 s = json.loads(line)
+                # Normalise field names: EAQA_RL.jsonl uses "multi_choice"
+                if "multi_choice" in s and "choices" not in s:
+                    s["choices"] = s["multi_choice"]
                 if os.path.exists(s.get("audio_path", "")):
                     samples.append(s)
                 else:
@@ -275,6 +288,25 @@ def log_metrics(
 
 
 # ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+def _find_latest_checkpoint(output_dir: str) -> Optional[str]:
+    """Return the most recent checkpoint path, or None."""
+    ckpt_root = os.path.join(output_dir, "checkpoints")
+    if not os.path.isdir(ckpt_root):
+        return None
+    steps = []
+    for name in os.listdir(ckpt_root):
+        if name.startswith("step_") or name == "final":
+            p = os.path.join(ckpt_root, name)
+            if os.path.isdir(p) and os.path.exists(os.path.join(p, "adapter_config.json")):
+                steps.append((os.path.getmtime(p), p))
+    steps.sort(reverse=True)
+    return steps[0][1] if steps else None
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -314,6 +346,9 @@ def main() -> None:
 
     # ── load data ──
     dataset = load_dataset(args.data_path)
+    if args.max_samples > 0:
+        dataset = dataset[:args.max_samples]
+        print(f"  Limited to first {args.max_samples} samples")
     print(f"  Data columns: {list(dataset[0].keys()) if dataset else 'empty'}")
 
     # ── optimiser ──
@@ -330,6 +365,7 @@ def main() -> None:
     # ── training loop ──
     tokenizer = processor.tokenizer
     global_step = 0
+    skipped_samples = set()  # sample IDs that crash every rollout
     total_batches = (len(dataset) + args.batch_size - 1) // args.batch_size
 
     print(f"\n{'='*60}")
@@ -355,9 +391,29 @@ def main() -> None:
             policy_model.eval()
 
             for sample_idx, sample in enumerate(batch):
+                sid = sample.get("id", "?")
+                if sid in skipped_samples:
+                    print(f"  [{epoch}.{batch_idx//args.batch_size}.{sample_idx}.skip] {sid} (previously failed, skipping)")
+                    for _ in range(args.num_rollouts):
+                        all_results.append(({
+                            "final_response": "", "pred_answer": "",
+                            "total_rounds": 0, "used_segments": [],
+                            "stop_reason": "skipped",
+                        }, sample))
+                    continue
+                sample_failed = False
                 for r_idx in range(args.num_rollouts):
+                    if sample_failed:
+                        print(f"  [{epoch}.{batch_idx//args.batch_size}.{sample_idx}.{r_idx}] "
+                              f"{sid[:50]}  SKIP (sample already failed)")
+                        all_results.append(({
+                            "final_response": "", "pred_answer": "",
+                            "total_rounds": 0, "used_segments": [],
+                            "stop_reason": "error",
+                        }, sample))
+                        continue
                     print(f"  [{epoch}.{batch_idx//args.batch_size}.{sample_idx}.{r_idx}] "
-                          f"{sample.get('id', '?')[:50]}", end="", flush=True)
+                          f"{sid[:50]}", end="", flush=True)
                     t_gen = time.time()
                     try:
                         with torch.no_grad():
@@ -383,20 +439,86 @@ def main() -> None:
                         print(f"  {gen_time:.1f}s  rounds={rounds}  segs={segs}  pred={pred[:40]}")
                     except Exception as e:
                         print(f"  ERROR: {e}")
-                        # Placeholder result so group indexing stays valid
-                        dummy = {
+                        # Flush async CUDA errors to avoid contamination
+                        try:
+                            torch.cuda.synchronize()
+                        except RuntimeError:
+                            pass
+                        sample_failed = True
+                        all_results.append(({
                             "final_response": "",
                             "pred_answer": "",
                             "total_rounds": 0,
                             "used_segments": [],
                             "stop_reason": "error",
-                        }
-                        all_results.append((dummy, sample))
+                        }, sample))
+
+            # Detect CUDA device-side asserts during rollouts
+            cuda_error_detected = False
+            for r, s in all_results:
+                if r.get("stop_reason") == "error":
+                    cuda_error_detected = True
+                    break
 
             # Free GPU memory from rollout audio/generation artefacts
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
+            try:
+                torch.cuda.synchronize()
+            except RuntimeError as e:
+                print(f"  WARNING: CUDA synchronize failed (async errors): {e}")
+                cuda_error_detected = True
+            try:
+                torch.cuda.empty_cache()
+            except RuntimeError as e:
+                print(f"  WARNING: CUDA empty_cache failed: {e}")
+                cuda_error_detected = True
             gc.collect()
+
+            # Check for samples where ALL rollouts failed → skip in future
+            failed_ids = set()
+            for i in range(current_batch_size):
+                sample_rollouts = all_results[i * args.num_rollouts:(i + 1) * args.num_rollouts]
+                all_failed = all(r.get("stop_reason") == "error" for r, _ in sample_rollouts)
+                if all_failed and sample_rollouts:
+                    sid = sample_rollouts[0][1].get("id", "?")
+                    failed_ids.add(sid)
+                    print(f"  SKIP-LIST: '{sid}' (all {len(sample_rollouts)} rollouts failed)")
+            if failed_ids:
+                skipped_samples.update(failed_ids)
+
+            # ── CUDA error recovery: reload models & skip batch ──
+            if cuda_error_detected:
+                print(f"  CUDA error detected in batch — reloading models to recover ...")
+                # Release all CUDA resources
+                del all_results
+                del encoded
+                del policy_model
+                del ref_model
+                gc.collect()
+                for _ in range(3):
+                    try:
+                        torch.cuda.synchronize()
+                    except RuntimeError:
+                        pass
+                    try:
+                        torch.cuda.empty_cache()
+                    except RuntimeError:
+                        pass
+                gc.collect()
+
+                try:
+                    latest_ckpt = _find_latest_checkpoint(args.output_dir)
+                    load_path = latest_ckpt if latest_ckpt else args.adapter_path
+                    print(f"  Reloading policy from: {load_path}")
+                    policy_model, processor = load_policy_model(args.model_path, load_path)
+                    ref_model = load_reference_model(args.model_path, args.adapter_path, device)
+                    tokenizer = processor.tokenizer
+                    optimizer = torch.optim.AdamW(policy_model.parameters(), lr=args.learning_rate)
+                    print(f"  Models reloaded, skipping batch")
+                except Exception as e:
+                    print(f"  Model reload failed: {e}")
+                    print(f"  CUDA context unrecoverable — exiting training")
+                    break
+                continue  # skip training for this batch
 
             # Switch to train mode and keep it throughout Phase 3–5.
             # This avoids a CUDA state corruption seen when calling thinker()
@@ -417,102 +539,130 @@ def main() -> None:
                 all_metrics.append(parse_rollout_metrics(result, sample, rew))
 
             # ════════════════════════════════════════════
-            # Phase 3+5: Text log-probs + GRPO loss + update
+            # Phase 3–5: Micro-batched log-probs + GRPO loss + update
             # ════════════════════════════════════════════
-            # Build batched inputs for all rollouts, then run a SINGLE
-            # thinker() forward per model.  This avoids the CUDA error
-            # triggered by 14+ separate forward() calls on the thinker
-            # with gradient tracking enabled.
-            text_pairs: List[Tuple[str, str]] = []
+            # Evidence from Exp A/B/C:
+            #   - thinker() forward with requires_grad=True crashes above a
+            #     (B, T) threshold (~8×538 with 80 GB A800)
+            #   - This is NOT caused by rollout-phase GPU fragmentation (Exp B)
+            #     nor by audio token patterns (Exp C)
+            #   - bs=4 is the safe ceiling; micro-batch + gradient accumulation
+            #     gives mathematically equivalent gradients to a full batch
+            #     forward (see tasks/08_grpo_smoke_plan.md §22-23)
+
+            # Encode all rollouts
+            tokenizer = processor.tokenizer
+            encoded = []  # (full_ids, seq_len, prompt_len)
             for result, sample in all_results:
                 prompt = build_text_prompt(sample["question"], sample.get("choices", []))
                 completion = result.get("final_response", "")
-                text_pairs.append((prompt, completion))
-
-            # Encode all pairs
-            tokenizer = processor.tokenizer
-            encoded = []  # (full_ids, seq_len, prompt_len)
-            max_seq_len = 0
-            for prompt, completion in text_pairs:
                 prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
                 full_ids = prompt_ids + tokenizer.encode(completion, add_special_tokens=False)
                 if len(full_ids) > args.max_text_length:
                     full_ids = full_ids[:args.max_text_length]
                 seq_len = len(full_ids)
-                max_seq_len = max(max_seq_len, seq_len)
                 encoded.append((full_ids, seq_len, len(prompt_ids)))
 
-            # Pad to max_seq_len × B
-            B = len(encoded)
-            padded_ids = torch.zeros((B, max_seq_len), dtype=torch.long, device=device)
-            padded_attn = torch.zeros((B, max_seq_len), dtype=torch.long, device=device)
-            padded_cmask = torch.zeros((B, max_seq_len - 1), dtype=torch.float, device=device)
-            for i, (full_ids, seq_len, prompt_len) in enumerate(encoded):
-                padded_ids[i, :seq_len] = torch.tensor(full_ids, dtype=torch.long, device=device)
-                padded_attn[i, :seq_len] = 1
-                # completion_mask (shifted): position t predicts token t+1
-                # Completion starts at prompt_len, so mask positions [prompt_len-1 .. seq_len-2]
+            B_total = len(encoded)  # = batch_size × num_rollouts
+
+            # Pre-compute total masked tokens for loss normalisation
+            # (needed before the micro-batch loop so each sub-loss is
+            #  scaled correctly: loss_mb * n_mb / N_total)
+            total_masked_tokens = 0
+            for _full_ids, seq_len, prompt_len in encoded:
                 if seq_len - 1 > prompt_len - 1:
-                    padded_cmask[i, prompt_len - 1: seq_len - 1] = 1.0
+                    total_masked_tokens += (seq_len - 1) - (prompt_len - 1)
 
-            policy_model.train()
-            optimizer.zero_grad()
-
-            gc.collect()
-            torch.cuda.synchronize()
-
-            # Single batched forward — policy (with grad)
-            try:
-                policy_logps_padded = get_per_token_logps(
-                    policy_model, padded_ids, padded_attn
-                )
-            except RuntimeError as e:
-                print(f"\n  [Batched ERROR] policy_model logps:")
-                print(f"    padded_ids shape: {padded_ids.shape} device: {padded_ids.device}")
-                print(f"    padded_attn shape: {padded_attn.shape} device: {padded_attn.device}")
-                for n, p in policy_model.named_parameters():
-                    if p.requires_grad:
-                        print(f"    LoRA param {n}: dtype={p.dtype} device={p.device} isnan={torch.isnan(p).any()} isinf={torch.isinf(p).any()}")
-                raise
-
-            old_logps_padded = policy_logps_padded.detach()
-
-            # Single batched forward — reference (no grad)
-            with torch.no_grad():
-                ref_logps_padded = get_per_token_logps(
-                    ref_model, padded_ids, padded_attn
-                )
-
-            masks_padded = padded_cmask
-
-            # ════════════════════════════════════════════
-            # Phase 4: Advantages
-            # ════════════════════════════════════════════
+            # Advantages (Phase 4 — still group-normalised per query)
             rollout_totals = [m["rollout_total"] for m in all_metrics]
             group_ids = [i // args.num_rollouts for i in range(len(all_results))]
             advantages = compute_advantages(rollout_totals, group_ids).to(device)
 
-            # ════════════════════════════════════════════
-            # Loss + backward + step
-            # ════════════════════════════════════════════
-            loss_dict = compute_grpo_loss(
-                policy_logps_padded,
-                old_logps_padded,
-                advantages,
-                ref_logps=ref_logps_padded,
-                beta=args.kl_coef,
-                epsilon=0.2,
-                mask=masks_padded,
-            )
+            micro_bs = args.policy_forward_micro_batch_size
+            num_micro = (B_total + micro_bs - 1) // micro_bs
 
-            loss = loss_dict["loss"]
-            loss.backward()
+            policy_model.train()
+            optimizer.zero_grad()
+
+            # Accumulators for logging (weighted by n_tokens)
+            log_loss_sum = 0.0
+            log_kl_sum = 0.0
+            log_ratio_sum = 0.0
+            log_tokens = 0
+
+            for mb_idx in range(0, B_total, micro_bs):
+                mb_encoded = encoded[mb_idx:mb_idx + micro_bs]
+                mb_adv = advantages[mb_idx:mb_idx + micro_bs]
+                mb_bs = len(mb_encoded)
+
+                # Re-pad to this micro-batch's own max length (saves memory)
+                mb_max_len = max(seq_len for _full_ids, seq_len, _pl in mb_encoded)
+                mb_ids = torch.zeros((mb_bs, mb_max_len), dtype=torch.long, device=device)
+                mb_attn = torch.zeros((mb_bs, mb_max_len), dtype=torch.long, device=device)
+                mb_cmask = torch.zeros((mb_bs, mb_max_len - 1), dtype=torch.float, device=device)
+                for j, (full_ids, seq_len, prompt_len) in enumerate(mb_encoded):
+                    mb_ids[j, :seq_len] = torch.tensor(full_ids, dtype=torch.long, device=device)
+                    mb_attn[j, :seq_len] = 1
+                    if seq_len - 1 > prompt_len - 1:
+                        mb_cmask[j, prompt_len - 1: seq_len - 1] = 1.0
+
+                gc.collect()
+                torch.cuda.synchronize()
+
+                # Policy forward (WITH grad) — micro-batch
+                mb_policy_logps = get_per_token_logps(policy_model, mb_ids, mb_attn)
+                mb_old_logps = mb_policy_logps.detach()
+
+                # Reference forward (NO grad) — micro-batch
+                with torch.no_grad():
+                    mb_ref_logps = get_per_token_logps(ref_model, mb_ids, mb_attn)
+
+                # GRPO loss for this micro-batch
+                loss_dict = compute_grpo_loss(
+                    mb_policy_logps, mb_old_logps, mb_adv,
+                    ref_logps=mb_ref_logps, beta=args.kl_coef, epsilon=0.2,
+                    mask=mb_cmask,
+                )
+
+                n_tokens = mb_cmask.sum()
+                if n_tokens > 0 and total_masked_tokens > 0:
+                    scale = n_tokens / total_masked_tokens
+                    scaled_loss = loss_dict["loss"] * scale
+                elif total_masked_tokens == 0:
+                    scaled_loss = loss_dict["loss"] / num_micro
+                else:
+                    scaled_loss = loss_dict["loss"]
+
+                scaled_loss.backward()  # gradient accumulation
+
+                # Accumulate logging metrics (detach)
+                log_loss_sum += loss_dict["loss"].detach().item() * n_tokens.item()
+                log_kl_sum += loss_dict["kl"].detach().item() * n_tokens.item()
+                log_ratio_sum += loss_dict["ratio"].detach().item() * n_tokens.item()
+                log_tokens += n_tokens.item()
+
+                # Free micro-batch tensors
+                del mb_policy_logps, mb_old_logps, mb_ref_logps, loss_dict, scaled_loss
+                torch.cuda.empty_cache()
+
+            # ── Single step after all micro-batches ──
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 policy_model.parameters(), args.max_grad_norm
             )
             optimizer.step()
 
-            # Free computation graph and intermediate tensors
+            # Build aggregated loss_dict for logging
+            agg_loss_dict = {
+                "loss": torch.tensor(log_loss_sum / max(log_tokens, 1)),
+                "kl": torch.tensor(log_kl_sum / max(log_tokens, 1)),
+                "ratio": torch.tensor(log_ratio_sum / max(log_tokens, 1)),
+            }
+
+            # Print micro-batch diagnostic
+            print(f"  micro-batches {num_micro} × bs≤{micro_bs} | "
+                  f"max_T={max(seq_len for _, seq_len, _ in encoded)} | "
+                  f"total_masked_tokens={total_masked_tokens}")
+
             policy_model.eval()
             torch.cuda.empty_cache()
 
@@ -525,8 +675,10 @@ def main() -> None:
                 "learning_rate": args.learning_rate,
                 "epoch": epoch + batch_idx / len(dataset),
                 "step_time_s": step_time,
+                "num_microbatches": num_micro,
+                "micro_batch_size": micro_bs,
             }
-            log_metrics(writer, global_step, loss_dict, all_metrics, extra)
+            log_metrics(writer, global_step, agg_loss_dict, all_metrics, extra)
 
             # Log per-rollout details to JSONL
             log_path = os.path.join(args.output_dir, "logs", "rollouts.jsonl")
@@ -535,7 +687,7 @@ def main() -> None:
                     f.write(json.dumps(m, ensure_ascii=False) + "\n")
 
             # ── save checkpoint every 5 steps ──
-            if global_step > 0 and global_step % 5 == 0:
+            if global_step > 0 and global_step % args.checkpoint_every == 0:
                 ckpt_dir = os.path.join(
                     args.output_dir, "checkpoints", f"step_{global_step}"
                 )
@@ -543,6 +695,12 @@ def main() -> None:
                 print(f"  → Checkpoint saved: {ckpt_dir}")
 
             global_step += 1
+            if 0 < args.max_steps <= global_step:
+                print(f"\n  Reached --max_steps {args.max_steps}, stopping.")
+                break
+
+        if 0 < args.max_steps <= global_step:
+            break
 
         # End of epoch
         epoch_time = time.time() - epoch_start

@@ -680,3 +680,139 @@ KL(token_t)    = exp(log πref - log πθ) - (log πref - log πθ) - 1
 
 **Batched forward**（当前实现）：32 个 rollout 的 prompt+completion 序列拼成 (32, max_T) padded batch，πθ forward 1 次（有 grad），πref forward 1 次（no grad），πold = πθ.detach()。总共 2 次 `thinker()` 调用替代原来的 64 次。
 
+## 24. Batched forward 也崩溃（Job 41934，2026-05-12）
+
+**现象**：将 32 条 rollout 拼成 `(32, 591)` padded batch 做单次 `thinker()` forward，仍在 attention matmul 处崩溃（`CUDA driver error: invalid argument`，第 27 层 self-attention）。
+
+**关键**：单次调用排除了「14+ 次调用累积」假说。LoRA dtype 均为 float16，无 NaN/Inf。崩溃是**单次 forward 的 (B, T) 过大**导致的。
+
+## 25. 三实验定位根因（2026-05-12）
+
+| 实验 | 描述 | 结论 |
+|------|------|------|
+| **A: batch size sweep** | 同一批 rollout，扫 bs=1/2/4/8/16/32，T=538 | bs=1/2/4 全过 (41GB at bs=4)；bs=8 crash (CUDA invalid argument)；bs=16/32 crash (PyTorch allocator assert) |
+| **B: 分进程** | B1 只做 rollout 存 JSONL → 退出；B2 新进程加载模型直接从文件做 forward | B2 的 policy forward (bs=32, T=524) 仍然 crash。**排除了 rollout 阶段 GPU 碎片化假说** |
+| **C: 纯文本** | 不经过 rollout/audio，用合成文本直接 forward | bs=16/T=288 通过 (62GB)；bs=32/T=288 crash。**排除音频 token 特有问题** |
+
+### 根因结论
+
+**Policy forward with `requires_grad=True` 的激活值内存随 B×T 增长，超过 A800 80GB 上限。** Ref forward (no grad) 始终 OK 也印证了这一点。bs=4 是安全天花板。
+
+## 26. Micro-batch forward + gradient accumulation（2026-05-12）
+
+### 方案
+
+将 32 条 rollout 按 `--policy_forward_micro_batch_size 4` 切为 8 个 micro-batch，每 micro-batch 独立 forward/backward，梯度累加，最后统一 `optimizer.step()`。
+
+```
+for mb in microbatches(bs≤4):
+    policy_logps = thinker(policy_model, mb_ids)  # 有 grad
+    old_logps = policy_logps.detach()
+    ref_logps = thinker(ref_model, mb_ids)         # no grad
+    loss_mb = GRPO_loss(...)
+    (loss_mb × n_mb / N_total).backward()          # 梯度累加
+clip_grad_norm()
+optimizer.step()
+```
+
+梯度等价性：`Σ (∇(sum_mb / N_total)) = ∇(sum_all / N_total)`，与全 batch forward 数学等价。
+
+### Smoke test 结果（Job 41941）
+
+```
+micro-batches 8 × bs≤4 | max_T=591 | total_masked_tokens=6662
+step   0 | loss 0.1886 | R +0.222 (...) | correct 7/32 | KL 0.0026
+```
+
+✅ 单步训练成功，无 CUDA 错误。方案验证通过。
+
+## 27. Score 分析 — duplicate_seg vs has_answer（2026-05-12）
+
+从 smoke test 32 条 rollout 统计：
+
+| | has_answer (10) | duplicate_seg (22) |
+|---|---|---|
+| 平均 rollout_total | **+0.795** | -0.039 |
+| 正确率 | 4/10 (40%) | 3/22 (14%) |
+| 有 pred 输出 | 10/10 (100%) | 6/22 (27%) |
+| 空 pred | **0** | **16 (73%)** |
+| 格式分 avg | 0.475 | 0.102 |
+| consistency avg | -0.080 | -0.277 |
+
+### 得分分布
+
+- **has_answer 正确**: +1.400 (fmt=0.5, cst=-0.1, acc=0.5, seg=0.5)
+- **has_answer 错误**: +0.150~+0.500 (至少拿格式分)
+- **dup_seg 正确**: +0.950~+1.200 (被 consistency 多扣 -0.3)
+- **dup_seg 错误**: -0.300~-0.400 (无格式分 + consistency 重罚)
+
+**duplicate_seg 的根本问题**：73% 的情况下 finalization 轮抽不出 `<answer>` 标签，pred 为空。不是答错，是**没答出来**。finalization 强行收尾导致要么空答案、要么乱码。
+
+## 28. Consistency penalty 分析（2026-05-12）
+
+`r_consist` (echo_rl/rewards.py, `consist_mode="paper"`):
+
+```python
+# 每处 </seg> 之后，检查下一个非空白字符
+# 大写字母 or '<' → -0.1 per violation, max -0.5
+```
+
+- **`<think>` 后接 `</seg>`**: 惩罚合理 — 说明模型当新一句话来写，不连贯
+- **`<seg>` 后接 `</seg>`**: 惩罚合理 — 两段 seg 之间没有推理文本，不连贯
+- **大写字母开头**: 惩罚合理 — 说明模型当新句子而非从上一句继续
+
+**数据验证**：
+- has_answer: 1 个 `</seg>` 边界 → 典型 cst=-0.1 (R2 以 `<think>` 开头命中 `<`)
+- dup_seg: 2+ 个 `</seg>` 边界 + finalization 大写开头 → 典型 cst=-0.3~-0.4
+
+**当前惩罚力度**：正确 answer (+1.400) vs 错误 dup (-0.300) 差距 1.700，GRPO group-normalized advantage 信号充足。惩罚结构合理，缺的是足够多步训练。
+
+## 29. 数据准备 — EAQA_RL.jsonl（2026-05-12）
+
+- 原始 21,900 条，`audio_path` 为相对路径 `audios/...`
+- 批量替换为绝对路径 `/home/s2025244189/s2025244265/Projects/Echo_Project/mnt/bn/wdq-base1/data/ALMs/EAQA/audios/...`
+- 20/20 随机抽样验证通过
+- 字段 `multi_choice` → `choices` 归一化已加入训练脚本 `load_dataset`
+- 子目录：AudioSet, MusicBench, AVQA
+
+## 30. 子进程隔离 Rollout — 解决 CUDA device-side assert（2026-05-12）
+
+### 问题
+原始 GRPO 训练中，interleaved rollout 阶段 Qwen2.5-Omni 的 multimodal forward 内部触发 CUDA kernel assertion，一旦发生则整个进程 CUDA context 永久损坏，后续所有 CUDA 操作失败。错误与数据+模型权重组合有关，加载 LoRA 后比 fresh model 更容易触发。
+
+### 方案：子进程隔离
+- 每个 sample 的 rollout 在独立 Python 子进程中运行，自带全新 CUDA context
+- Worker 崩了 → 子进程死亡，主进程毫发无伤
+- 主进程只做纯文本 forward/backward（GRPO loss），不走 multimodal 路径，永远不会触发 assert
+
+### 实现文件
+
+| 文件 | 用途 |
+|------|------|
+| `scripts/rl/isolated_rollout_worker.py` | 独立 rollout worker 子进程（加载模型 → 跑 N 个 interleaved rollout → 写 JSON → 退出）|
+| `scripts/rl/rollout_smoke_test.py` | 主训练 harness（spawn worker → 收集结果 → 加载训练模型 → reward/forward/backward → 卸载模型）|
+| `scripts/rl/submit_isolated_smoke.sh` | SLURM 提交脚本 |
+
+### 设计关键
+```
+Phase 1 (主进程，无 GPU 模型): spawn 4 worker 子进程 → 收集 rollout 结果
+Phase 2 (主进程): 加载 policy + ref 模型 → reward → GRPO loss → 卸载模型
+Phase 3: 重复下一 batch
+```
+
+每 batch 都重新加载/卸载模型，确保 CUDA context 完全隔离。
+
+### Smoke test 结果（Job 41971）
+
+| Step | Workers | Rollouts | Loss | Reward | Correct | 时间 |
+|------|---------|----------|------|--------|---------|------|
+| 0 | 4/4 ✅ | 16/16 | 0.0573 | -0.050 | 1/16 | 402s |
+| 1 | 4/4 ✅ | 16/16 | 0.0918 | -0.038 | 1/16 | 337s |
+| 2 | 4/4 ✅ | 15/16* | 0.1730 | +0.047 | 2/16 | 894s |
+
+*AudioSet_12 有 1 个 rollout 失败，不影响主进程
+
+### 结论
+- 12 个 worker 子进程全部正常运行，无 CUDA error 污染主进程
+- 隔离方案验证通过，可扩展到全量 500 条训练
+- 代价：每 batch 重复加载模型，4 rollout 的速度 ≈ 原方案 8 rollout（加载开销抵消了 rollout 减半）
