@@ -35,7 +35,8 @@ from scripts.interleaved_infer import run_interleaved, load_model_and_processor
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--sample_json", required=True, help="JSON string of sample")
+    p.add_argument("--sample_json", default=None,
+                   help="JSON string of sample (one-shot mode)")
     p.add_argument("--model_path", required=True)
     p.add_argument("--adapter_path", required=True)
     p.add_argument("--max_rounds", type=int, default=2)
@@ -46,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--timeout", type=int, default=600,
                    help="Timeout in seconds (handled by caller)")
     p.add_argument("--finalize_max_new_tokens", type=int, default=64)
+    p.add_argument("--persistent", action="store_true",
+                   help="Run in persistent mode: read tasks from stdin, write results to stdout")
     return p.parse_args()
 
 
@@ -57,19 +60,10 @@ def _timeout_handler(signum, frame):
     raise TimeoutError("Worker timed out")
 
 
-def main() -> None:
-    args = parse_args()
-
-    # Redirect all print output to stderr so stdout stays clean for JSON
-    _real_stdout = sys.stdout
-    sys.stdout = sys.stderr
-
-    sample = json.loads(args.sample_json)
-    if "multi_choice" in sample and "choices" not in sample:
-        sample["choices"] = sample["multi_choice"]
-
-    signal.signal(signal.SIGALRM, _timeout_handler)
+def run_one_sample(model, processor, sample: dict, args: argparse.Namespace) -> dict:
+    """Run rollouts for a single sample. Returns result dict."""
     signal.alarm(args.timeout)
+    t_start = time.time()
 
     result = {
         "sample_id": sample.get("id", "?"),
@@ -77,15 +71,8 @@ def main() -> None:
         "worker_error": None,
         "worker_elapsed_s": 0.0,
     }
-    t_start = time.time()
 
     try:
-        # Load model (fresh CUDA context in subprocess)
-        model, processor = load_model_and_processor(
-            args.model_path, args.adapter_path,
-        )
-        model.eval()
-
         for r_idx in range(args.num_generations):
             try:
                 with torch.no_grad():
@@ -109,24 +96,21 @@ def main() -> None:
                     "used_segments": rollout.get("used_segments", []),
                     "stop_reason": rollout.get("stop_reason", "unknown"),
                     "round_outputs": rollout.get("round_outputs", []),
+                    "used_segment_paths": rollout.get("used_segment_paths", []),
                     "triggered_interleaved": rollout.get("triggered_interleaved", False),
                     "has_final_answer": rollout.get("has_final_answer", False),
                     "answer_correct": rollout.get("answer_correct", False),
                 })
             except Exception as e:
                 result["rollouts"].append({
-                    "final_response": "",
-                    "pred_answer": "",
-                    "total_rounds": 0,
-                    "used_segments": [],
-                    "stop_reason": "error",
-                    "round_outputs": [],
+                    "final_response": "", "pred_answer": "",
+                    "total_rounds": 0, "used_segments": [],
+                    "stop_reason": "error", "round_outputs": [],
+                    "used_segment_paths": [],
                     "triggered_interleaved": False,
-                    "has_final_answer": False,
-                    "answer_correct": False,
+                    "has_final_answer": False, "answer_correct": False,
                     "error": str(e)[:200],
                 })
-                # If it's a CUDA error, stop — don't bother with remaining gens
                 if "CUDA" in str(e) or "device-side assert" in str(e):
                     break
 
@@ -139,9 +123,83 @@ def main() -> None:
         signal.alarm(0)
         result["worker_elapsed_s"] = time.time() - t_start
 
-    # Write result to stdout for main process to capture
+    return result
+
+
+def main() -> None:
+    args = parse_args()
+
+    # Redirect all print output to stderr so stdout stays clean for JSON
+    _real_stdout = sys.stdout
+    sys.stdout = sys.stderr
+
+    if args.persistent:
+        _main_persistent(args, _real_stdout)
+    else:
+        _main_one_shot(args, _real_stdout)
+
+
+def _main_one_shot(args: argparse.Namespace, _real_stdout) -> None:
+    sample = json.loads(args.sample_json)
+    if "multi_choice" in sample and "choices" not in sample:
+        sample["choices"] = sample["multi_choice"]
+
+    signal.signal(signal.SIGALRM, _timeout_handler)
+
+    model, processor = load_model_and_processor(
+        args.model_path, args.adapter_path,
+    )
+    model.eval()
+
+    result = run_one_sample(model, processor, sample, args)
+
     json.dump(result, _real_stdout, ensure_ascii=False)
     _real_stdout.flush()
+
+
+def _main_persistent(args: argparse.Namespace, _real_stdout) -> None:
+    """Persistent worker: load model once, process tasks from stdin."""
+    print("[persistent_worker] Loading model ...", file=sys.stderr)
+    model, processor = load_model_and_processor(
+        args.model_path, args.adapter_path,
+    )
+    model.eval()
+    print("[persistent_worker] Model loaded, waiting for tasks ...", file=sys.stderr)
+
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    task_count = 0
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            task = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"[persistent_worker] Bad JSON input, skipping", file=sys.stderr)
+            continue
+
+        if task.get("action") == "shutdown":
+            print(f"[persistent_worker] Shutdown after {task_count} tasks", file=sys.stderr)
+            break
+
+        sample = task.get("sample", task)
+        if "multi_choice" in sample and "choices" not in sample:
+            sample["choices"] = sample["multi_choice"]
+
+        # Override per-task params if provided
+        for key in ("num_generations", "max_rounds", "max_new_tokens",
+                     "temperature", "finalize_max_new_tokens", "timeout"):
+            if key in task:
+                setattr(args, key, task[key])
+
+        task_count += 1
+        result = run_one_sample(model, processor, sample, args)
+
+        # Write result line to real stdout
+        json.dump(result, _real_stdout, ensure_ascii=False)
+        _real_stdout.write("\n")
+        _real_stdout.flush()
 
 
 if __name__ == "__main__":
