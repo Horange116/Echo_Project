@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gpu_id", type=int, default=0)
     p.add_argument("--policy_forward_micro_batch_size", type=int, default=4)
     p.add_argument("--max_steps", type=int, default=-1)
-    p.add_argument("--checkpoint_every", type=int, default=5)
+    p.add_argument("--checkpoint_every", type=int, default=30)
     return p.parse_args()
 
 
@@ -94,19 +94,17 @@ def load_dataset(path: str, max_samples: int) -> List[dict]:
 
 def run_worker(
     sample: dict, model_path: str, adapter_path: str,
-    output_dir: str, gpu_id: int,
+    gpu_id: int,
     max_rounds: int, max_new_tokens: int, num_rollouts: int,
     temperature: float, finalize_max_new_tokens: int, timeout: int,
 ) -> dict:
     sample_id = sample.get("id", "?")
-    result_path = os.path.join(output_dir, f"rollout_{sample_id}.json")
 
     cmd = [
         sys.executable, "-u", WORKER_SCRIPT,
         "--sample_json", json.dumps(sample, ensure_ascii=False),
         "--model_path", model_path,
         "--adapter_path", adapter_path,
-        "--output", result_path,
         "--max_rounds", str(max_rounds),
         "--max_new_tokens", str(max_new_tokens),
         "--num_generations", str(num_rollouts),
@@ -121,16 +119,18 @@ def run_worker(
 
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
-        if os.path.exists(result_path):
-            with open(result_path) as f:
-                return json.load(f)
+        if proc.stdout.strip():
+            return json.loads(proc.stdout.strip())
         else:
             return {
                 "sample_id": sample_id, "rollouts": [],
-                "worker_error": f"no output; stdout={proc.stdout[-300:]}; stderr={proc.stderr[-300:]}",
+                "worker_error": f"no stdout; stderr={proc.stderr[-300:]}",
             }
     except subprocess.TimeoutExpired:
         return {"sample_id": sample_id, "rollouts": [], "worker_error": "timeout"}
+    except json.JSONDecodeError:
+        return {"sample_id": sample_id, "rollouts": [],
+                "worker_error": f"bad json; stdout={proc.stdout[-300:]} stderr={proc.stderr[-300:]}"}
     except Exception as e:
         return {"sample_id": sample_id, "rollouts": [], "worker_error": str(e)[:300]}
 
@@ -182,11 +182,8 @@ def main() -> None:
     args = parse_args()
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     os.makedirs(args.output_dir, exist_ok=True)
-    os.makedirs(os.path.join(args.output_dir, "worker_results"), exist_ok=True)
     os.makedirs(os.path.join(args.output_dir, "checkpoints"), exist_ok=True)
     os.makedirs(os.path.join(args.output_dir, "logs"), exist_ok=True)
-
-    worker_tmp = os.path.join(args.output_dir, "worker_results")
     device = torch.device(f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu")
     print(f"  Device: {device}")
     print(f"  Config: {vars(args)}")
@@ -231,7 +228,7 @@ def main() -> None:
                 t_w = time.time()
                 wres = run_worker(
                     sample, args.model_path, args.adapter_path,
-                    worker_tmp, args.gpu_id,
+                    args.gpu_id,
                     args.max_rounds, args.max_new_tokens, args.num_rollouts,
                     args.temperature, args.finalize_max_new_tokens,
                     args.worker_timeout,
@@ -286,15 +283,26 @@ def main() -> None:
                     meta = build_rollout_metadata(rollout_data)
                     rew = rollout_reward(resp, sample.get("answer", ""), meta)
                     all_metrics.append({
+                        "step": global_step,
+                        "sample_id": sample.get("id", "?"),
+                        "question": sample.get("question", "")[:200],
+                        "gold_answer": sample.get("answer", ""),
                         "rollout_total": rew.get("rollout_total", 0.0),
                         "format": rew.get("format", 0.0),
                         "consistency": rew.get("consistency", 0.0),
                         "accuracy": rew.get("accuracy", 0.0),
                         "segment": rew.get("segment", 0.0),
+                        "pred_answer": rollout_data.get("pred_answer", ""),
                         "has_answer": int(bool(rollout_data.get("pred_answer", ""))),
                         "is_correct": int(rollout_data.get("pred_answer", "") == sample.get("answer", "")),
                         "round_count": rollout_data.get("total_rounds", 0),
                         "stop_reason": rollout_data.get("stop_reason", "error"),
+                        "triggered_interleaved": rollout_data.get("triggered_interleaved", False),
+                        "has_final_answer": rollout_data.get("has_final_answer", False),
+                        "answer_correct": rollout_data.get("answer_correct", False),
+                        "final_response": resp,
+                        "used_segments": rollout_data.get("used_segments", []),
+                        "round_outputs": rollout_data.get("round_outputs", []),
                     })
 
                 # Encode

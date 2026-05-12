@@ -38,7 +38,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sample_json", required=True, help="JSON string of sample")
     p.add_argument("--model_path", required=True)
     p.add_argument("--adapter_path", required=True)
-    p.add_argument("--output", required=True, help="Path to write result JSON")
     p.add_argument("--max_rounds", type=int, default=2)
     p.add_argument("--max_new_tokens", type=int, default=96)
     p.add_argument("--num_generations", type=int, default=4,
@@ -60,6 +59,10 @@ def _timeout_handler(signum, frame):
 
 def main() -> None:
     args = parse_args()
+
+    # Redirect all print output to stderr so stdout stays clean for JSON
+    _real_stdout = sys.stdout
+    sys.stdout = sys.stderr
 
     sample = json.loads(args.sample_json)
     if "multi_choice" in sample and "choices" not in sample:
@@ -136,11 +139,9 @@ def main() -> None:
         signal.alarm(0)
         result["worker_elapsed_s"] = time.time() - t_start
 
-    # Write result atomically
-    tmp = args.output + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(result, f, ensure_ascii=False)
-    os.rename(tmp, args.output)
+    # Write result to stdout for main process to capture
+    json.dump(result, _real_stdout, ensure_ascii=False)
+    _real_stdout.flush()
 
 
 if __name__ == "__main__":

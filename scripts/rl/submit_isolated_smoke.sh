@@ -30,8 +30,8 @@ python -u scripts/rl/rollout_smoke_test.py \
   --model_path "$BASE_MODEL" \
   --adapter_path "$ADAPTER" \
   --data_path "dataJson/NAQA/EAQA_RL.jsonl" \
-  --output_dir "output/grpo_isolated_smoke" \
-  --max_samples 20 \
+  --output_dir "output/grpo_isolated_500" \
+  --max_samples 500 \
   --num_rollouts 4 \
   --batch_size 4 \
   --learning_rate 1e-6 \
@@ -43,7 +43,6 @@ python -u scripts/rl/rollout_smoke_test.py \
   --finalize_max_new_tokens 64 \
   --policy_forward_micro_batch_size 4 \
   --worker_timeout 600 \
-  --max_steps 3 \
-  --checkpoint_every 5
+  --checkpoint_every 30
 
 echo "[$(date)] Smoke test complete"
