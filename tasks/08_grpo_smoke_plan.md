@@ -907,3 +907,41 @@ Phase 3: 重复下一 batch
 **约束**：
 - 无法降级 torch：vLLM 0.12.0 强制依赖 `torch==2.9.0`
 - 无法轻易更换 NCCL 版本：NCCL 随 torch 捆绑发布
+
+## 34. VERL 单 GPU Smoke Test — 仍然 SIGSEGV（2026-05-13）
+
+### 目标
+验证单 GPU 是否能绕开 torch 2.9.0 多 GPU 分布式初始化 SIGSEGV。
+
+### 配置
+- `trainer.n_gpus_per_node=1`, `trainer.nnodes=1`
+- vLLM rollout (n=1), GRPO, KL loss on
+- base model: Qwen2.5-Omni-7B (no LoRA)
+- data: EAQA_RL_smoke20.parquet
+
+### 新建文件
+- `script/stage2_multiturn_rl_smoke.sh`: 单 GPU smoke 脚本
+- `output/testCode/submit_verl_smoke.sh`: SLURM 提交脚本
+
+### 结果（Job 42053, node42, 1×A800）
+
+| GPU | Framework | 结果 | Crash 位置 |
+|-----|-----------|------|-----------|
+| 1 | FSDP (VERL) | SIGSEGV | `ref_policy_wg.init_model()` → FSDP wrap |
+
+模型成功加载（8.93B params），但在 Ray worker 内执行 FSDP `wrap_policy` 时崩溃：
+```
+ray.exceptions.ActorDiedError: Worker unexpectedly exits with a connection error code 2.
+→ worker crashed unexpectedly due to SIGSEGV or another unexpected error.
+```
+
+### 更新后的完整测试矩阵
+
+| # | GPU | 框架 | Crash 位置 |
+|---|-----|------|-----------|
+| 1-6 | 2 | FSDP (VERL) | `actor_rollout_wg.init_model()` |
+| 7-8 | 2 | DeepSpeed ZeRO-2/3 | `deepspeed.initialize()` |
+| **9** | **1** | **FSDP (VERL)** | **`ref_policy_wg.init_model()`** |
+
+### 修订后的根因分析
+问题**不是多 GPU NCCL 通信**，而是更底层：**torch 2.9.0 + Qwen2.5-Omni + FSDP 模型包装在 Ray worker 中 SIGSEGV**，与 GPU 数量无关。模型加载正常，FSDP `_build_model_optimizer()` 内的 `wrap_policy` 一执行就崩。
