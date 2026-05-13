@@ -185,13 +185,14 @@ reward 需要的稳定字段是：
 - batched vLLM interleaved rollout controller
 - 单样本 smoke
 - 2 样本 × 2 rollout batched smoke
+- custom rollout worker / GRPO smoke 接线
 
 当前还没有做：
 
 - VERL 接入
 - 训练
 - server 化请求协议
-- custom GRPO 采样编排
+- 更大规模训练放大
 
 ## 实测结果
 
@@ -429,3 +430,292 @@ reward 需要的稳定字段是：
 - `torch 2.6.0+cu124`
 - `vllm 0.8.5`
 - `gpu_memory_utilization=0.85`
+
+## Test 11: scale20 custom GRPO smoke
+
+入口：
+
+- `script/test11_vllm_batched_grpo_scale20.sh`
+
+默认配置：
+
+- `MAX_SAMPLES=20`
+- `NUM_ROLLOUTS=2`
+- `MAX_STEPS=3`
+- `MAX_ROUNDS=2`
+- `MAX_TOKENS=96`
+- `TEMPERATURE=1.0`
+- `FINALIZE_MAX_TOKENS=64`
+- `GPU_MEMORY_UTILIZATION=0.85`
+- `MAX_MODEL_LEN=32768`
+
+输出目录：
+
+- `output/rl_rollout/test11_scale20/`
+- `output/grpo_vllm_batched_scale20/`
+
+结果：
+
+- `test11` 全部通过
+- 在 A800Z 单卡 + Singularity 路线上稳定跑完
+- 成功进入 `rollout_smoke_test.py`
+- 成功启动 `vllm_batched` worker
+- 完成 `step 0 / 1 / 2`，共 `3` 个 step
+- `3 steps × 2 rollouts = 6` 条 rollout 全部成功
+- `rollout_success_count=6`
+- `rollout_failed_count=0`
+- reward 统计正常：
+  - `mean=0.583`
+  - `min=0.5`
+  - `max=1.0`
+- 总耗时 `584` 秒，约 `9.7` 分钟
+- 未见 CUDA 异常、worker 启动异常、reward 崩溃、GRPO text-only forward 异常
+
+关键产物：
+
+- `output/rl_rollout/test11_scale20/test11_stdout.log`
+- `output/rl_rollout/test11_scale20/test11_stderr.log`
+- `output/rl_rollout/test11_scale20/test11_summary.json`
+- `output/grpo_vllm_batched_scale20/logs/rollouts.jsonl`
+
+结论：
+
+- `vllm_batched` rollout 已经不只是“单点 smoke 可用”
+- 在小规模放大版 custom GRPO smoke 下也已验证稳定
+- 当前阶段已经从“链路打通”进入“可小规模稳定运行”
+
+## 当前阶段结论
+
+截至 `test11`，当前主线已经完成：
+
+- controller 单样本 smoke
+- controller batched smoke
+- isolated worker 接通
+- rollout + reward + GRPO forward 最小 smoke
+- scale20 小规模放大 smoke
+
+因此当前更合理的下一步不再是证明“vLLM 能不能推理”，而是：
+
+1. 继续做更大规模稳定性 / 吞吐验证
+2. 评估 `pool` / 多 GPU worker 分摊
+3. 再往后一层推进更完整的 custom GRPO 训练放大
+
+## 当前瓶颈判断
+
+基于 `test11` 的运行行为，当前实现里最明显的固定成本来自：
+
+- `per_task` 模式下反复拉起 worker 子进程
+- 每次 worker 都重新初始化 `vllm.LLM`
+- vLLM engine / compile / warmup 的固定开销较大
+
+因此：
+
+- `persistent` 模式的主要价值是**摊薄单卡反复加载成本**
+- 这条路线大概率能进一步缩短单卡总时长
+
+但当前优先级不应先转去打磨 `persistent`，原因是：
+
+- `persistent` 更偏向**单卡优化**
+- 当前更关键的问题是：**多卡多 worker rollout 的并行吞吐形态是否稳定**
+
+所以顺序上应当是：
+
+1. 先验证 `pool + worker_devices=0,1,...` 的多卡多 worker 方案
+2. 如果 `pool` 稳定，再回头比较：
+   - `per_task`
+   - `persistent`
+   - `pool`
+   三种模式的总耗时 / 吞吐 / 稳定性
+
+一句话：
+
+- `per_task` 的瓶颈判断基本成立
+- 但 `persistent` 当前属于**后续优化项**
+- `pool` 才是更贴近论文多卡 rollout 形态的优先验证方向
+
+## Test 12: 2-card pool multi-worker rollout smoke
+
+入口：
+
+- `script/test12_vllm_batched_pool2_scale20.sh`
+
+目标：
+
+- 验证 `rollout_worker_mode=pool`
+- 验证 `2` 张 GPU + `2` 个 persistent workers
+- 验证多卡 worker 分摊下的 rollout / reward / text-only GRPO 训练链路
+
+实际运行：
+
+- `srun -p A800Z --gres=gpu:2 --time=10:00 bash script/test12_vllm_batched_pool2_scale20.sh`
+
+结果：
+
+- pool 模式已成功启用
+- 日志确认：
+  - `[pool] 2 workers on devices [0, 1]`
+  - Batch 0 / Batch 1 的 rollout 都成功完成
+  - shutdown-before-training / restart-after-training 逻辑已正常工作
+- 已完成：
+  - `step 0` 完整训练
+  - `step 1` 的 rollout 阶段
+- 关键统计：
+  - `rollout_success_count=8`
+  - `rollout_failed_count=0`
+  - Step 0 reward: `mean=0.600`
+  - Step 1 rollout 也已成功写入 `rollouts.jsonl`
+- batch rollout 耗时：
+  - Batch 0: `232.8s`
+  - Batch 1: `218.3s`
+
+阻塞点：
+
+- 当前失败不是 pool 代码逻辑失败
+- 真正阻塞是 `srun --time=10:00` 被 SLURM QOS 强制终止
+- 终止时机发生在：
+  - Batch 1 rollout 完成之后
+  - 进入 Batch 1 training model load 阶段时
+
+补充修复：
+
+- `scripts/rl/rollout_smoke_test.py`
+  - 修复了 pool shutdown-before-training 的语法/流程问题
+  - 新增了 pool restart-after-training 逻辑
+
+结论：
+
+- `test12` 可以视为**功能链路部分通过**
+- 当前已经证明：
+  - `2` 卡 pool 多 worker rollout 形态可运行
+  - persistent worker 的 shutdown / restart 逻辑可运行
+  - 多卡 worker 分摊下没有出现 CUDA 异常 / worker 通信崩溃
+- 但还**没有在足够长时限下完整跑完 3 steps**
+- 下一步应优先：
+  - 在更长 `srun --time` 下重跑 `test12`
+  - 先拿到完整 3-step 通过结论，再进入下一阶段
+
+## Test 13: strict_interleaved minimum smoke
+
+入口：
+
+- `script/test13_vllm_batched_strict_min.sh`
+
+目标：
+
+- 沿用已打通的 `Singularity + vllm_batched` rollout 路线
+- 不改 controller 主逻辑
+- 只把训练 forward 从 `text_only` 切到 `strict_interleaved`
+- 做最小 smoke：`4` 样本、`2` rollout、`1` step
+
+正确运行方式：
+
+- `srun -p A800Z --gres=gpu:1 --time=10:00 bash script/test13_vllm_batched_strict_min.sh`
+
+结果：
+
+- `test13` 全部通过
+- 成功进入 `rollout_smoke_test.py`
+- 成功进入 `strict_interleaved` forward
+- 成功完成 `step 0`
+- 关键统计：
+  - `strict_forward_success=4`
+  - `strict_forward_failed=0`
+  - `rollout_success_count=4`
+  - `rollout_failed_count=0`
+  - `peak_memory_mb=37198`
+- step 日志：
+  - `step   0 | loss nan | R +0.438 | correct 0/4 | 338.1s | fw=stri wk=per_`
+
+关键产物：
+
+- `output/rl_rollout/test13_strict_min/test13_stdout.log`
+- `output/rl_rollout/test13_strict_min/test13_stderr.log`
+- `output/rl_rollout/test13_strict_min/test13_summary.json`
+- `output/grpo_vllm_batched_strict_min/logs/rollouts.jsonl`
+
+结论：
+
+- `strict_interleaved` 已不再只是“代码里存在的 experimental 分支”
+- 至少在最小 smoke 条件下，已验证：
+  - rollout 正常
+  - multimodal strict forward 正常
+  - strict 输入重建没有失败
+  - strict logprob 路径没有直接崩溃
+
+注意：
+
+- 当前 `loss nan` 仍然值得后续继续盯
+- 但就“strict_interleaved 最小链路能否跑通”这个问题，当前答案已经是 **能跑通**
+
+## Test 14: strict_interleaved small-scale smoke
+
+入口：
+
+- `script/test14_vllm_batched_strict_scale.sh`
+
+目标：
+
+- 在 `test13` 通过的基础上，小幅放大 strict 路径
+- 验证 `loss nan` 是否稳定复现
+- 判断问题更像出在 strict 输入重建，还是 GRPO 数值链路
+
+实际运行：
+
+- `srun -p A800Z --gres=gpu:1 --time=10:00 bash script/test14_vllm_batched_strict_scale.sh`
+
+结果：
+
+- 成功进入 `rollout_smoke_test.py`
+- 成功进入 `strict_interleaved` forward
+- Batch 0 的 strict forward 全部成功：
+  - `strict_forward_success=4`
+  - `strict_forward_failed=0`
+- rollout 成功：
+  - `rollout_success_count=8`
+  - `rollout_failed_count=0`
+- Step 0 reward 正常：
+  - `mean=0.812`
+  - `min=0.500`
+  - `max=1.000`
+  - `correct=3/4`
+- 但 step 0 仍出现：
+  - `loss nan`
+  - `KL nan`
+- Batch 1 rollout 完成后，作业在第二步 training model load 阶段被 `srun` 时间限制终止
+
+关键观测：
+
+- stderr 中 strict input 重建正常：
+  - `input_ids=[1, 349~354]`
+  - `masked_text_tokens=82~87`
+- 无 strict input 重建失败
+- 无 CUDA 错误
+- 无 Python traceback
+
+结论：
+
+- `loss nan` 在 strict 路径下稳定复现
+- 而且它与 `text_only` 路径中的现象一致：`loss nan + KL nan`
+- 因此当前问题**不像是 strict_interleaved 特有 bug**
+- 更像是当前 GRPO 实现中的：
+  - `policy/ref logprob`
+  - `KL`
+  - 或其上游数值稳定性
+  出现了 `inf/-inf/nan`
+
+当前判断优先级：
+
+1. `multimodal logprob / KL` 数值问题
+2. `loss_mask` / token 边界问题（次优先）
+3. `reward / advantage` 本身（优先级更低，因为 reward 值正常）
+
+## 更新后的下一步
+
+当前顺序调整为：
+
+1. `pool` 多卡 worker 形态已经完成核心验证，但完整 3-step 结论仍缺
+2. `strict_interleaved` 最小 smoke 与小规模放大 smoke 都已通过 rollout/forward 层
+3. 下一步不再继续单纯放大，而应转为：
+   - 数值诊断 `loss nan`
+   - 重点检查 `policy_logps / ref_logps / KL / loss_mask / advantages`
+4. 在数值问题定位清楚后，再决定是否继续放大 strict 规模

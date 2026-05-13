@@ -53,6 +53,18 @@ from grpo_utils import (
 
 WORKER_SCRIPT = os.path.join(os.path.dirname(__file__), "isolated_rollout_worker.py")
 
+def _diagnose_nan(tag: str, **tensors: torch.Tensor) -> None:
+    """Print min/max/any_nan/any_inf for each named tensor."""
+    parts = [f"[nan-diag {tag}]"]
+    for name, t in tensors.items():
+        if t is None or t.numel() == 0:
+            parts.append(f"{name}=None/empty")
+            continue
+        parts.append(f"{name}: min={t.min().item():.6g} max={t.max().item():.6g} "
+                     f"mean={t.mean().item():.6g} nan={bool(t.isnan().any())} "
+                     f"inf={bool(t.isinf().any())}")
+    print("  " + " | ".join(parts))
+
 # Audio token IDs for Qwen2.5-Omni
 AUDIO_BOS_ID = 151647
 AUDIO_EOS_ID = 151648
@@ -128,6 +140,49 @@ def _find_container_cmd() -> str:
         if shutil.which(cmd):
             return cmd
     raise RuntimeError("Neither singularity nor apptainer found")
+
+
+def _resolve_worker_visible_device(gpu_id: int, parent_visible: str) -> str:
+    """Resolve one worker's CUDA_VISIBLE_DEVICES from the parent allocation.
+
+    Cases handled:
+    - parent unset: use gpu_id directly
+    - parent set to a single device token: reuse that token
+    - gpu_id already matches one parent token (physical-id style): keep it
+    - gpu_id is a logical index into parent tokens (0/1 inside a 2-GPU srun):
+      map it to the corresponding parent token
+    """
+    if not parent_visible:
+        return str(gpu_id)
+
+    tokens = [tok.strip() for tok in parent_visible.split(",") if tok.strip()]
+    if not tokens:
+        return str(gpu_id)
+    if len(tokens) == 1:
+        return tokens[0]
+
+    gpu_str = str(gpu_id)
+    if gpu_str in tokens:
+        return gpu_str
+
+    if 0 <= gpu_id < len(tokens):
+        return tokens[gpu_id]
+
+    return gpu_str
+
+
+def _build_worker_env(gpu_id: int, *, pin_single_visible: bool) -> Dict[str, str]:
+    env = os.environ.copy()
+    parent_visible = env.get("CUDA_VISIBLE_DEVICES", "")
+
+    if pin_single_visible:
+        env["CUDA_VISIBLE_DEVICES"] = _resolve_worker_visible_device(gpu_id, parent_visible)
+    elif not parent_visible:
+        # Match previous per-task behavior when the parent has no GPU allocation.
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    env["QWEN_OMNI_SKIP_SPK"] = "1"
+    return env
 
 
 def _build_worker_cmd(
@@ -237,15 +292,8 @@ def run_worker(
         persistent=False,
     )
 
-    env = os.environ.copy()
-    # Inherit CUDA_VISIBLE_DEVICES from SLURM/parent to avoid
-    # "CUDA driver error: invalid argument" when vLLM V1 engine
-    # forks its core process and CUDA was already initialized in
-    # the parent (via torch import in rollout_smoke_test.py).
-    # Only override if the parent didn't already set it.
-    if "CUDA_VISIBLE_DEVICES" not in env or not env["CUDA_VISIBLE_DEVICES"]:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    env["QWEN_OMNI_SKIP_SPK"] = "1"
+    # Per-task mode inherits the parent's CUDA_VISIBLE_DEVICES when present.
+    env = _build_worker_env(gpu_id, pin_single_visible=False)
 
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
@@ -318,9 +366,9 @@ class PersistentWorkerHandle:
             persistent=True,
         )
 
-        env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-        env["QWEN_OMNI_SKIP_SPK"] = "1"
+        # Persistent/pool mode must pin each worker to one GPU inside the
+        # parent SLURM allocation instead of exposing the full device list.
+        env = _build_worker_env(gpu_id, pin_single_visible=True)
 
         self.proc = subprocess.Popen(
             cmd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -656,6 +704,25 @@ def _count_audio_tokens(ids: List[int]) -> int:
     return count
 
 
+def _diagnose_input_features(tag: str, input_features, feat_attn) -> None:
+    """Print input_features and feature_attention_mask stats."""
+    if input_features is None:
+        print(f"  [diag {tag}] input_features=None")
+        return
+    print(f"  [diag {tag}] input_features: shape={tuple(input_features.shape)} "
+          f"dtype={input_features.dtype} "
+          f"min={input_features.min().item():.6g} "
+          f"max={input_features.max().item():.6g} "
+          f"mean={input_features.mean().item():.6g} "
+          f"nan={input_features.isnan().any().item()} "
+          f"inf={input_features.isinf().any().item()}")
+    if feat_attn is not None:
+        print(f"  [diag {tag}] feature_attention_mask: shape={tuple(feat_attn.shape)} "
+              f"sum={feat_attn.sum().item()} "
+              f"min={feat_attn.min().item()} max={feat_attn.max().item()} "
+              f"nan={feat_attn.isnan().any().item()}")
+
+
 def get_per_token_logps_multimodal(
     model, input_ids: torch.Tensor, attention_mask: torch.Tensor,
     input_features: Optional[torch.Tensor] = None,
@@ -675,7 +742,18 @@ def get_per_token_logps_multimodal(
 
     outputs = thinker(**kwargs)
     logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+    # ── logits diagnostic ──
+    print(f"  [diag thinker_logits] shape={tuple(logits.shape)} "
+          f"min={logits.min().item():.6g} max={logits.max().item():.6g} "
+          f"mean={logits.mean().item():.6g} "
+          f"nan={bool(logits.isnan().any())} inf={bool(logits.isinf().any())}")
     log_probs = logits.log_softmax(dim=-1)
+    # ── log_softmax diagnostic ──
+    print(f"  [diag log_softmax] "
+          f"min={log_probs.min().item():.6g} max={log_probs.max().item():.6g} "
+          f"mean={log_probs.mean().item():.6g} "
+          f"nan={bool(log_probs.isnan().any())} inf={bool(log_probs.isinf().any())}")
+    # ── end diagnostic ──
     per_token_logps = log_probs[:, :-1].gather(
         dim=-1, index=input_ids[:, 1:].unsqueeze(-1),
     ).squeeze(-1)
@@ -934,12 +1012,17 @@ def main() -> None:
                         all_results.append((r, sample))
 
                 # ═══ Phase 3: Load models, rewards, training ═══
-                # Shut down persistent worker to free GPU memory for training
+                # Shut down workers to free GPU memory for training
+                had_workers = bool(persistent_worker or pool)
                 if persistent_worker:
                     print(f"  [persistent] shutting down worker before training ...")
                     persistent_worker.shutdown()
                     persistent_worker = None
-                    # Aggressively clean up after subprocess CUDA context
+                if pool:
+                    print(f"  [pool] shutting down workers before training ...")
+                    pool.shutdown()
+                    pool = None
+                if had_workers:
                     import time as _time
                     _time.sleep(3)
                     torch.cuda.synchronize()
@@ -1030,6 +1113,9 @@ def main() -> None:
                             total_masked_tokens += loss_mask.sum().item()
                             report.strict_forward_success += 1
 
+                            # ── input_features diagnostic ──
+                            _diagnose_input_features("pre_forward", input_features, feat_attn)
+
                             try:
                                 policy_logps = get_per_token_logps_multimodal(
                                     policy_model, input_ids, attn_mask,
@@ -1044,7 +1130,42 @@ def main() -> None:
                                         feature_attention_mask=feat_attn,
                                     )
 
+                                # ── text-only control: same input_ids, no audio ──
+                                with torch.no_grad():
+                                    text_logps = get_per_token_logps_multimodal(
+                                        policy_model, input_ids, attn_mask,
+                                        input_features=None,
+                                        feature_attention_mask=None,
+                                    )
+                                print(f"  [diag text_control] "
+                                      f"min={text_logps.min().item():.6g} "
+                                      f"max={text_logps.max().item():.6g} "
+                                      f"mean={text_logps.mean().item():.6g} "
+                                      f"nan={bool(text_logps.isnan().any())} "
+                                      f"inf={bool(text_logps.isinf().any())}")
+                                del text_logps
+                                # ── end text-only control ──
+
                                 adv_i = advantages[i:i+1]
+
+                                # ── nan diagnostic ──
+                                _ratio = torch.exp(policy_logps - old_logps)
+                                _ref_minus_policy = ref_logps - policy_logps
+                                _kl = torch.exp(_ref_minus_policy) - _ref_minus_policy - 1
+                                _diagnose_nan(
+                                    "strict_pre_loss",
+                                    advantages=advantages,
+                                    adv_i=adv_i,
+                                    policy_logps=policy_logps,
+                                    old_logps=old_logps,
+                                    ref_logps=ref_logps,
+                                    ref_minus_policy=_ref_minus_policy,
+                                    kl_tensor=_kl,
+                                    ratio=_ratio,
+                                    loss_mask=loss_mask,
+                                )
+                                # ── end diagnostic ──
+
                                 loss_dict = compute_grpo_loss(
                                     policy_logps, old_logps, adv_i,
                                     ref_logps=ref_logps, beta=args.kl_coef,
@@ -1225,6 +1346,20 @@ def main() -> None:
                         worker_max_model_len=args.worker_max_model_len,
                         worker_work_dir=args.worker_work_dir,
                     )
+                elif args.rollout_worker_mode == "pool":
+                    print(f"  [pool] restarting workers for next batch ...")
+                    pool = WorkerPool(
+                        args.model_path, args.adapter_path,
+                        args.num_rollout_workers, worker_devices,
+                        args.max_rounds, args.max_new_tokens, args.num_rollouts,
+                        args.temperature, args.finalize_max_new_tokens,
+                        args.worker_timeout,
+                        rollout_backend=args.rollout_backend,
+                        worker_gpu_memory_utilization=args.worker_gpu_memory_utilization,
+                        worker_max_model_len=args.worker_max_model_len,
+                        worker_work_dir=args.worker_work_dir,
+                    )
+                    print(f"    [pool] {args.num_rollout_workers} workers restarted on devices {worker_devices}")
 
                 global_step += 1
                 if 0 < args.max_steps <= global_step:

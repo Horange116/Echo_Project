@@ -198,6 +198,15 @@
 - worker 端到端最小链路已经实跑通过：
   - `isolated_rollout_worker.py + vllm_batched + Singularity` 通过
   - `rollout_smoke_test.py + vllm_batched + Singularity` 通过
+- 小规模放大版 custom GRPO smoke 也已通过：
+  - `script/test11_vllm_batched_grpo_scale20.sh`
+  - `MAX_SAMPLES=20`
+  - `NUM_ROLLOUTS=2`
+  - `MAX_STEPS=3`
+  - `rollout_success_count=6`
+  - `rollout_failed_count=0`
+  - reward `mean=0.583 / min=0.5 / max=1.0`
+  - 总耗时约 `584` 秒
 - 现有 worker / reward / smoke 训练脚本仍使用老字段名，因此新增的是兼容层，而不是整条训练脚手架重写
 
 备选路线：
@@ -235,6 +244,124 @@
 - 配置沿用了成功的 Singularity `vllm 0.8.5` 路线
 - `gpu_memory_utilization=0.85`
 - continuation 逻辑保持为“同一条 prompt 续写”
+- `test11` 进一步证明这条链路在小规模多样本 / 多 rollout / 多 step 下稳定
+
+## 6.1 当前性能判断
+
+基于 `test11` 和现有 `rollout_smoke_test.py` 结构，当前最明显的瓶颈是：
+
+- `per_task` 模式反复新起 worker
+- 每次 worker 都重新加载并初始化 `vllm.LLM`
+
+因此：
+
+- `persistent` 很可能能改善单卡总耗时
+- 但它更偏单卡优化，不是当前最高优先级
+
+当前更合理的顺序是：
+
+1. 先验证 `pool` / 多 GPU worker 分摊是否稳定
+2. 再比较 `per_task` / `persistent` / `pool` 的吞吐差异
+
+不要把“优化单卡 persistent”排在“验证多卡 pool”之前。
+
+## 6.2 Test12 状态
+
+`test12` 是当前第一步多卡 pool 验证：
+
+- `script/test12_vllm_batched_pool2_scale20.sh`
+- 目标：`2` 卡、`2` 个 persistent rollout workers、`pool` 模式
+
+当前结论：
+
+- pool 核心链路已经通了
+- Batch 0 完整通过（rollout + training）
+- Batch 1 rollout 也已通过
+- pool 的 shutdown / restart 流程已修复并实跑成功
+- 未见 CUDA 异常、worker persistent 通信崩溃、rollout JSON 结构错误
+
+当前未完整通过的原因：
+
+- `srun --time=10:00` 的 SLURM QOS 时限不够
+- 作业在 Batch 1 training model load 阶段被强制 kill
+
+所以：
+
+- 这不是“pool 路线失败”
+- 而是“pool 路线已基本验证通过，但需要更长时间配额完成完整 3-step 结论”
+
+下一步应当先做：
+
+- 用更长 `--time` 重跑 `test12`
+- 拿到完整 3-step 通过结果
+- 然后再比较单卡 `test11` 与 2 卡 `test12` 的总吞吐
+
+## 6.3 Test13 状态
+
+`test13` 是当前 strict training forward 的最小验证：
+
+- `script/test13_vllm_batched_strict_min.sh`
+- 路线：`Singularity + vllm_batched rollout + strict_interleaved forward`
+
+当前结论：
+
+- 已成功通过
+- 正确运行方式是：
+  - `srun -p A800Z --gres=gpu:1 --time=10:00 bash script/test13_vllm_batched_strict_min.sh`
+- 关键结果：
+  - `strict_forward_success=4`
+  - `strict_forward_failed=0`
+  - `rollout_success_count=4`
+  - `rollout_failed_count=0`
+  - `peak_memory_mb=37198`
+- 已完成 `step 0`
+
+这意味着：
+
+- `strict_interleaved` 已经从“只存在于代码里的 experimental 路径”
+- 进入“最小 smoke 已验证可运行”的阶段
+
+但仍需注意：
+
+- 当前 step 日志里仍出现 `loss nan`
+- 所以下一步更像是：
+  - 放大 strict smoke 规模
+  - 观察 `nan` 是否稳定复现
+  - 判断是 reward / advantage / mask / logprob 数值问题，还是仅日志表现问题
+
+## 6.4 Test14 状态
+
+`test14` 是 strict 路径的小规模放大验证：
+
+- `script/test14_vllm_batched_strict_scale.sh`
+- 路线：`Singularity + vllm_batched rollout + strict_interleaved forward`
+
+当前结论：
+
+- strict rollout / forward 继续成功
+- `strict_forward_success=4`
+- `strict_forward_failed=0`
+- `rollout_success_count=8`
+- `rollout_failed_count=0`
+- reward 数值正常（step 0: mean `0.812`, min `0.500`, max `1.000`）
+- 但 `loss nan` 与 `KL nan` 继续稳定复现
+
+这说明：
+
+- 当前问题不像是 strict 输入重建失败
+- 也不像是 reward 本身先坏掉
+- 更像是当前 GRPO 实现中的 `policy/ref logprob / KL` 数值稳定性问题
+- 并且这个问题不是 strict 专属，因为 text-only 路径也出现过同样的 `loss nan + KL nan`
+
+因此下一步应当先做：
+
+- 不再继续单纯放大 smoke
+- 先做 GRPO 数值诊断：
+  - `policy_logps` 是否含 `nan/inf`
+  - `ref_logps` 是否含 `nan/inf`
+  - `KL` 的 token 级统计
+  - `loss_mask.sum()` 是否异常
+  - `advantages` 范围是否异常
 
 ## 9. 不要重复做的事
 
@@ -254,4 +381,4 @@
 > `0.8.4` 太旧，模型支持缺失；
 > `0.8.5` 宿主机 wheel 被当前集群的 `glibc/Triton` 卡住；
 > 但 `0.8.5` 在 Ubuntu 22.04 / glibc 2.35 的 Singularity 容器里，已经成功通过 `import + LLM load + 单音频 inference`；
-> 在此基础上，新的 batched Echo rollout controller 已经完成，并且按作者原始 `inference_multiturn.py` 的“同一条 prompt 续写”逻辑实现；它现在已经成功接入现有 custom rollout worker 链路，下一步是决定先接更完整的 custom GRPO 运行，还是先做 server 化封装。
+> 在此基础上，新的 batched Echo rollout controller 已经完成，并且按作者原始 `inference_multiturn.py` 的“同一条 prompt 续写”逻辑实现；它现在已经成功接入现有 custom rollout worker 链路，并通过了 `test11` 的小规模放大 smoke、`test12` 的 2 卡 pool 核心验证、`test13` 的 strict_interleaved 最小 smoke，以及 `test14` 的 strict 小规模放大 smoke。当前阶段不再是“链路能不能接通”，而是“定位并修复 GRPO 的 `loss/KL nan` 数值问题，再继续放大多卡 rollout 与 strict training”。
