@@ -317,7 +317,7 @@ def load_training_models(model_path: str, adapter_path: str, device: torch.devic
 
     processor = Qwen2_5OmniProcessor.from_pretrained(model_path)
     base = Qwen2_5OmniForConditionalGeneration.from_pretrained(
-        model_path, torch_dtype=torch.float16, device_map=device,
+        model_path, torch_dtype=torch.float16, device_map="cpu",
     )
     policy_model = PeftModel.from_pretrained(base, adapter_path, is_trainable=True)
     if disable_talker:
@@ -328,7 +328,7 @@ def load_training_models(model_path: str, adapter_path: str, device: torch.devic
     policy_model.eval()
 
     base2 = Qwen2_5OmniForConditionalGeneration.from_pretrained(
-        model_path, torch_dtype=torch.float16, device_map=device,
+        model_path, torch_dtype=torch.float16, device_map="cpu",
     )
     ref_model = PeftModel.from_pretrained(base2, adapter_path)
     if disable_talker:
@@ -372,29 +372,19 @@ def build_strict_interleaved_input(
     """
     try:
         import librosa
-        from scripts.interleaved_infer import build_conversation
 
         round_outputs = rollout_data.get("round_outputs", [])
         all_round_texts = []
         segs_by_round = {}
         used_segments = rollout_data.get("used_segments", [])
+        used_segment_paths = rollout_data.get("used_segment_paths", [])
 
         for ro in round_outputs:
             if isinstance(ro.get("round"), int):
                 all_round_texts.append(ro.get("text", ""))
-        for seg in used_segments:
+        for seg, path in zip(used_segments, used_segment_paths):
             r = seg.get("round", 0)
-            segs_by_round.setdefault(r, []).append(seg)
-
-        # Build final conversation (for finalization)
-        conversation = build_conversation(
-            audio_path=sample["audio_path"],
-            prompt=build_text_prompt(sample["question"], sample.get("choices", [])),
-            all_round_texts=all_round_texts,
-            used_segments=used_segments,
-            is_finalize=False,
-            sample_rate=16000,
-        )
+            segs_by_round.setdefault(r, []).append(path)
 
         full_audio, sr = librosa.load(sample["audio_path"], sr=16000)
 
@@ -407,8 +397,8 @@ def build_strict_interleaved_input(
 
         for i, round_text in enumerate(all_round_texts):
             content.append({"type": "text", "text": round_text.strip()})
-            for seg_info in segs_by_round.get(i + 1, []):
-                seg_audio, _ = librosa.load(seg_info["segment_path"], sr=16000)
+            for seg_path in segs_by_round.get(i + 1, []):
+                seg_audio, _ = librosa.load(seg_path, sr=16000)
                 content.append({"type": "audio", "audio": seg_audio})
 
         messages = [{"role": "user", "content": content}]
@@ -417,8 +407,8 @@ def build_strict_interleaved_input(
 
         # Gather all audios
         all_audios = [full_audio]
-        for seg in used_segments:
-            seg_audio, _ = librosa.load(seg["segment_path"], sr=16000)
+        for seg_path in used_segment_paths:
+            seg_audio, _ = librosa.load(seg_path, sr=16000)
             all_audios.append(seg_audio)
 
         if len(all_audios) > 1:
@@ -741,11 +731,23 @@ def main() -> None:
                         all_results.append((r, sample))
 
                 # ═══ Phase 3: Load models, rewards, training ═══
+                # Shut down persistent worker to free GPU memory for training
+                if persistent_worker:
+                    print(f"  [persistent] shutting down worker before training ...")
+                    persistent_worker.shutdown()
+                    persistent_worker = None
+                    # Aggressively clean up after subprocess CUDA context
+                    import time as _time
+                    _time.sleep(3)
+                    torch.cuda.synchronize()
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
                 print(f"\n  [{datetime.now()}] Loading training models ...")
                 t_load = time.time()
                 policy_model, ref_model, processor = load_training_models(
                     args.model_path, args.adapter_path, device,
-                    disable_talker=(args.grpo_forward_mode == "text_only"),
+                    disable_talker=True,  # talker only needed for speech generation, not training
                 )
                 tokenizer = processor.tokenizer
                 optimizer = torch.optim.AdamW(
@@ -1002,6 +1004,17 @@ def main() -> None:
                     unload_training_models(policy_model, ref_model)
                     torch.cuda.empty_cache()
                     gc.collect()
+
+                # Restart persistent worker for next batch
+                if args.rollout_worker_mode == "persistent":
+                    print(f"  [persistent] restarting worker for next batch ...")
+                    persistent_worker = PersistentWorkerHandle(
+                        args.model_path, args.adapter_path,
+                        worker_devices[0],
+                        args.max_rounds, args.max_new_tokens, args.num_rollouts,
+                        args.temperature, args.finalize_max_new_tokens,
+                        args.worker_timeout,
+                    )
 
                 global_step += 1
                 if 0 < args.max_steps <= global_step:

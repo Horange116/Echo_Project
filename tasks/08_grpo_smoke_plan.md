@@ -839,3 +839,71 @@ Phase 3: 重复下一 batch
 
 ### 标记
 此为"粗略基础版交错推理" baseline，后续优化将在此基础上进行。
+
+## 32. VERL FSDP GRPO Smoke Test — 全部 SIGSEGV（2026-05-13）
+
+### 目标
+评估 VERL (Volcano Engine RL) 框架能否替代自定义 GRPO 代码，支持 Qwen2.5-Omni-7B + LoRA 的分布式 RL 训练。
+
+### 环境
+- torch 2.9.0+cu128, NCCL 2.27.5, CUDA 12.8
+- vLLM 0.12.0（强制依赖 torch==2.9.0，阻止降级）
+- NVIDIA A800-SXM4-80GB x2 (node42)
+
+### 测试矩阵
+
+| # | Attention | KL Loss | NCCL 设置 | CUDA_BLOCKING | 结果 | Crash 位置 |
+|---|-----------|---------|-----------|---------------|------|-----------|
+| 1 | sdpa | on | default | 1 | SIGSEGV | ref_policy_wg.init_model() |
+| 2 | sdpa | off | default | 1 | SIGSEGV | actor_rollout_wg.init_model() |
+| 3 | eager | off | default | 1 | SIGSEGV | actor_rollout_wg.init_model() |
+| 4 | eager | off | P2P/IB disable | 1 | ROCR error | Ray worker init |
+| 5 | eager | off | P2P/IB disable+unset ROCR | 1 | SIGSEGV | actor_rollout_wg.init_model() |
+| 6 | sdpa | off | P2P/IB disable+unset ROCR | 0 | SIGSEGV | actor_rollout_wg.init_model() |
+
+### 关键发现
+- **flash_attn 依赖已移除**：用 SDPA/eager attention + fallback module 替代
+- **ROCR_VISIBLE_DEVICES 冲突已解决**：`unset ROCR_VISIBLE_DEVICES` 有效，`RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES=1` 无效
+- **KL loss / reference model 无关**：Attempt 2 移除 ref model 后仍在 actor init 时崩溃
+- **Attention 实现无关**：eager attention (attempt 3) 同样崩溃
+- **NCCL P2P/IB 设置无关**：禁用后仍然崩溃
+- **CUDA_LAUNCH_BLOCKING 无关**：改为 0 后仍然崩溃
+
+### 修改的文件
+- `verl/verl/workers/fsdp_workers.py`: `attn_implementation="sdpa"` (3 处)
+- `verl/verl/workers/actor/dp_actor.py`: flash_attn fallback try/except
+- `verl/verl/utils/flash_attn_fallback.py`: 新建，PyTorch-native unpad/pad/index_first_axis
+- `scripts/rl/run_verl_grpo_smoke.sh`: paper-aligned GRPO config (no KL, n=8, temp=1.0)
+- `scripts/rl/submit_verl_grpo_smoke.sh`: SLURM + NCCL workarounds
+
+## 33. DeepSpeed ZeRO Smoke Test — 全部 SIGSEGV（2026-05-13）
+
+### 目标
+评估 DeepSpeed ZeRO-2 / ZeRO-3 能否替代 FSDP 支撑 Qwen2.5-Omni-7B + LoRA 的多 GPU 训练。
+
+### 新建文件
+- `scripts/debug/ds_zero_qwen_omni_smoke.py`: 主测试脚本
+  - `load_model_and_adapter()`: 加载 Qwen2.5-Omni 到 CPU + PEFT LoRA
+  - `make_ds_config()`: 生成 ZeRO-2/ZeRO-3 DeepSpeed 配置
+  - `prepare_text_batch()` / `prepare_audio_batch()`: 构造测试数据
+  - `run_smoke_test()`: text forward → backward → step → audio forward (no_grad)
+- `configs/ds_zero2_smoke.json`: ZeRO-2 配置文件
+- `configs/ds_zero3_smoke.json`: ZeRO-3 配置文件
+- `output/testCode/submit_ds_zero_smoke.sh`: SLURM 提交脚本
+- `output/debug/ds_zero_smoke_report.json`: 测试报告
+
+### 结果
+
+| Framework | Stage | 结果 | Crash 位置 |
+|-----------|-------|------|-----------|
+| DeepSpeed | ZeRO-2 | SIGSEGV | deepspeed.initialize() |
+| DeepSpeed | ZeRO-3 | SIGSEGV | deepspeed.initialize() |
+
+模型 + LoRA 加载成功（~57s），但 `deepspeed.initialize()` 时 NCCL 通信初始化崩溃。
+
+### 根因分析
+**torch 2.9.0 NCCL 通信层 bug**。所有分布式框架（FSDP、DeepSpeed ZeRO-2、DeepSpeed ZeRO-3）在模型加载后的 NCCL collective 初始化阶段均发生 SIGSEGV。模型 checkpoint 加载和 LoRA adapter 应用独立运行正常。
+
+**约束**：
+- 无法降级 torch：vLLM 0.12.0 强制依赖 `torch==2.9.0`
+- 无法轻易更换 NCCL 版本：NCCL 随 torch 捆绑发布

@@ -1,0 +1,36 @@
+{
+  "meta": {
+    "date": "2026-05-13",
+    "node": "node42",
+    "gpus": "NVIDIA A800-SXM4-80GB x2",
+    "model": "Qwen2.5-Omni-7B",
+    "adapter": "v9b LoRA (rank=8, alpha=32, target=thinker linear)",
+    "base_model_path": "/hpai/aios3.0/private/user/s2025244189/s2025244265/Model_Env/Qwen2.5-Omni-7B",
+    "adapter_path": "output/testResult/v9b-diverse-cot-2epoch-20260509-103234/v0-20260509-103317/checkpoint-3078",
+    "torch": "2.9.0+cu128",
+    "deepspeed": "0.19.0",
+    "nccl": "2.27.5",
+    "cuda": "12.8"
+  },
+  "zero_2": {
+    "zero_stage": 2,
+    "init_success": false,
+    "forward_success": false,
+    "backward_success": false,
+    "step_success": false,
+    "audio_forward_success": false,
+    "peak_memory_gb": 0,
+    "error": "SIGSEGV (Signal 11) during deepspeed.initialize() — NCCL communication init crash. Model + LoRA loaded successfully. Crash identical to FSDP wrap_policy SIGSEGV."
+  },
+  "zero_3": {
+    "zero_stage": 3,
+    "init_success": false,
+    "forward_success": false,
+    "backward_success": false,
+    "step_success": false,
+    "audio_forward_success": false,
+    "peak_memory_gb": 0,
+    "error": "SIGSEGV (Signal 11) during deepspeed.initialize() — same crash as ZeRO-2 and FSDP."
+  },
+  "root_cause": "torch 2.9.0 NCCL communication layer bug. All distributed frameworks (FSDP, DeepSpeed ZeRO-2, DeepSpeed ZeRO-3) crash with SIGSEGV at NCCL collective initialization after model loading. Model checkpoint loading and LoRA adapter application work fine in isolation."
+}
