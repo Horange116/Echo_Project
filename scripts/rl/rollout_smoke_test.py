@@ -25,6 +25,8 @@ import json
 import os
 import gc
 import random
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -62,7 +64,7 @@ AUDIO_TOKEN_ID = 151646
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--model_path", required=True)
-    p.add_argument("--adapter_path", required=True)
+    p.add_argument("--adapter_path", default="")
     p.add_argument("--data_path", default="dataJson/NAQA/EAQA_RL.jsonl")
     p.add_argument("--output_dir", default="output/grpo_isolated_smoke")
     p.add_argument("--max_samples", type=int, default=20)
@@ -88,6 +90,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num_rollout_workers", type=int, default=1)
     p.add_argument("--worker_devices", default="",
                    help="Comma-separated GPU IDs for pool workers, e.g. '0,1,2,3'")
+    p.add_argument("--rollout_backend", default="hf",
+                   choices=["hf", "vllm_batched"])
+    p.add_argument("--worker_use_singularity", action="store_true")
+    p.add_argument("--worker_sif_path", default="")
+    p.add_argument("--worker_container_root", default="")
+    p.add_argument("--worker_gpu_memory_utilization", type=float, default=0.85)
+    p.add_argument("--worker_max_model_len", type=int, default=32768)
+    p.add_argument("--worker_work_dir", default="")
     # New: GRPO forward mode
     p.add_argument("--grpo_forward_mode", default="text_only",
                    choices=["text_only", "strict_interleaved"])
@@ -113,6 +123,84 @@ def load_dataset(path: str, max_samples: int) -> List[dict]:
     return samples
 
 
+def _find_container_cmd() -> str:
+    for cmd in ("singularity", "apptainer"):
+        if shutil.which(cmd):
+            return cmd
+    raise RuntimeError("Neither singularity nor apptainer found")
+
+
+def _build_worker_cmd(
+    sample: Optional[dict],
+    model_path: str,
+    adapter_path: str,
+    max_rounds: int,
+    max_new_tokens: int,
+    num_rollouts: int,
+    temperature: float,
+    finalize_max_new_tokens: int,
+    timeout: int,
+    rollout_backend: str,
+    worker_use_singularity: bool,
+    worker_sif_path: str,
+    worker_container_root: str,
+    worker_gpu_memory_utilization: float,
+    worker_max_model_len: int,
+    worker_work_dir: str,
+    persistent: bool = False,
+) -> List[str]:
+    worker_args = [
+        os.path.abspath(WORKER_SCRIPT),
+        "--model_path", model_path,
+        "--adapter_path", adapter_path,
+        "--rollout_backend", rollout_backend,
+        "--max_rounds", str(max_rounds),
+        "--max_new_tokens", str(max_new_tokens),
+        "--num_generations", str(num_rollouts),
+        "--temperature", str(temperature),
+        "--finalize_max_new_tokens", str(finalize_max_new_tokens),
+        "--timeout", str(timeout - 10),
+        "--gpu_memory_utilization", str(worker_gpu_memory_utilization),
+        "--max_model_len", str(worker_max_model_len),
+    ]
+    if worker_work_dir:
+        worker_args.extend(["--work_dir", worker_work_dir])
+    if persistent:
+        worker_args.append("--persistent")
+    if sample is not None:
+        worker_args.extend(["--sample_json", json.dumps(sample, ensure_ascii=False)])
+
+    if not worker_use_singularity:
+        return [sys.executable, "-u", *worker_args]
+
+    if not worker_sif_path or not worker_container_root:
+        raise ValueError("worker_use_singularity requires worker_sif_path and worker_container_root")
+    container_cmd = _find_container_cmd()
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    inner_cmd = " ".join(
+        [shlex.quote(os.path.join(worker_container_root, "bin", "python")), "-u"]
+        + [shlex.quote(arg) for arg in worker_args]
+    )
+    return [
+        container_cmd, "exec", "--nv",
+        "--bind", "/hpai:/hpai",
+        "--bind", "/home:/home",
+        "--bind", f"{project_root}:{project_root}",
+        "--bind", f"{model_path}:{model_path}",
+        "--bind", f"{worker_container_root}:{worker_container_root}",
+        worker_sif_path,
+        "bash", "-lc",
+        (
+            f"export PATH={shlex.quote(os.path.join(worker_container_root, 'bin'))}:$PATH; "
+            f"export PYTHONNOUSERSITE=1; "
+            f"export HF_HOME={shlex.quote(os.path.join(project_root, 'output', 'singularity', 'hf_cache'))}; "
+            f"export TRANSFORMERS_CACHE={shlex.quote(os.path.join(project_root, 'output', 'singularity', 'hf_cache'))}; "
+            f"cd {shlex.quote(project_root)}; "
+            f"{inner_cmd}"
+        ),
+    ]
+
+
 # ── per-task worker (original) ──
 
 def run_worker(
@@ -120,24 +208,43 @@ def run_worker(
     gpu_id: int,
     max_rounds: int, max_new_tokens: int, num_rollouts: int,
     temperature: float, finalize_max_new_tokens: int, timeout: int,
+    rollout_backend: str = "hf",
+    worker_use_singularity: bool = False,
+    worker_sif_path: str = "",
+    worker_container_root: str = "",
+    worker_gpu_memory_utilization: float = 0.85,
+    worker_max_model_len: int = 32768,
+    worker_work_dir: str = "",
 ) -> dict:
     sample_id = sample.get("id", "?")
-
-    cmd = [
-        sys.executable, "-u", WORKER_SCRIPT,
-        "--sample_json", json.dumps(sample, ensure_ascii=False),
-        "--model_path", model_path,
-        "--adapter_path", adapter_path,
-        "--max_rounds", str(max_rounds),
-        "--max_new_tokens", str(max_new_tokens),
-        "--num_generations", str(num_rollouts),
-        "--temperature", str(temperature),
-        "--finalize_max_new_tokens", str(finalize_max_new_tokens),
-        "--timeout", str(timeout - 10),
-    ]
+    cmd = _build_worker_cmd(
+        sample=sample,
+        model_path=model_path,
+        adapter_path=adapter_path,
+        max_rounds=max_rounds,
+        max_new_tokens=max_new_tokens,
+        num_rollouts=num_rollouts,
+        temperature=temperature,
+        finalize_max_new_tokens=finalize_max_new_tokens,
+        timeout=timeout,
+        rollout_backend=rollout_backend,
+        worker_use_singularity=worker_use_singularity,
+        worker_sif_path=worker_sif_path,
+        worker_container_root=worker_container_root,
+        worker_gpu_memory_utilization=worker_gpu_memory_utilization,
+        worker_max_model_len=worker_max_model_len,
+        worker_work_dir=worker_work_dir,
+        persistent=False,
+    )
 
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # Inherit CUDA_VISIBLE_DEVICES from SLURM/parent to avoid
+    # "CUDA driver error: invalid argument" when vLLM V1 engine
+    # forks its core process and CUDA was already initialized in
+    # the parent (via torch import in rollout_smoke_test.py).
+    # Only override if the parent didn't already set it.
+    if "CUDA_VISIBLE_DEVICES" not in env or not env["CUDA_VISIBLE_DEVICES"]:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     env["QWEN_OMNI_SKIP_SPK"] = "1"
 
     try:
@@ -165,23 +272,51 @@ class PersistentWorkerHandle:
 
     def __init__(self, model_path: str, adapter_path: str, gpu_id: int,
                  max_rounds: int, max_new_tokens: int, num_rollouts: int,
-                 temperature: float, finalize_max_new_tokens: int, timeout: int):
+                 temperature: float, finalize_max_new_tokens: int, timeout: int,
+                 rollout_backend: str = "hf",
+                 worker_use_singularity: bool = False,
+                 worker_sif_path: str = "",
+                 worker_container_root: str = "",
+                 worker_gpu_memory_utilization: float = 0.85,
+                 worker_max_model_len: int = 32768,
+                 worker_work_dir: str = ""):
         self.gpu_id = gpu_id
         self.num_rollouts = num_rollouts
         self.restart_count = 0
+        self.model_path = model_path
+        self.adapter_path = adapter_path
+        self.max_rounds = max_rounds
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self.finalize_max_new_tokens = finalize_max_new_tokens
+        self.timeout = timeout
+        self.rollout_backend = rollout_backend
+        self.worker_use_singularity = worker_use_singularity
+        self.worker_sif_path = worker_sif_path
+        self.worker_container_root = worker_container_root
+        self.worker_gpu_memory_utilization = worker_gpu_memory_utilization
+        self.worker_max_model_len = worker_max_model_len
+        self.worker_work_dir = worker_work_dir
 
-        cmd = [
-            sys.executable, "-u", WORKER_SCRIPT,
-            "--model_path", model_path,
-            "--adapter_path", adapter_path,
-            "--max_rounds", str(max_rounds),
-            "--max_new_tokens", str(max_new_tokens),
-            "--num_generations", str(num_rollouts),
-            "--temperature", str(temperature),
-            "--finalize_max_new_tokens", str(finalize_max_new_tokens),
-            "--timeout", str(timeout - 10),
-            "--persistent",
-        ]
+        cmd = _build_worker_cmd(
+            sample=None,
+            model_path=model_path,
+            adapter_path=adapter_path,
+            max_rounds=max_rounds,
+            max_new_tokens=max_new_tokens,
+            num_rollouts=num_rollouts,
+            temperature=temperature,
+            finalize_max_new_tokens=finalize_max_new_tokens,
+            timeout=timeout,
+            rollout_backend=rollout_backend,
+            worker_use_singularity=worker_use_singularity,
+            worker_sif_path=worker_sif_path,
+            worker_container_root=worker_container_root,
+            worker_gpu_memory_utilization=worker_gpu_memory_utilization,
+            worker_max_model_len=worker_max_model_len,
+            worker_work_dir=worker_work_dir,
+            persistent=True,
+        )
 
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -221,12 +356,22 @@ class PersistentWorkerHandle:
 
     def restart(self, model_path: str, adapter_path: str,
                 max_rounds: int, max_new_tokens: int, num_rollouts: int,
-                temperature: float, finalize_max_new_tokens: int, timeout: int) -> None:
+                temperature: float, finalize_max_new_tokens: int, timeout: int,
+                **kwargs) -> None:
         """Kill and restart the worker."""
         self.shutdown()
-        self.__init__(model_path, adapter_path, self.gpu_id,
-                      max_rounds, max_new_tokens, num_rollouts,
-                      temperature, finalize_max_new_tokens, timeout)
+        self.__init__(
+            model_path, adapter_path, self.gpu_id,
+            max_rounds, max_new_tokens, num_rollouts,
+            temperature, finalize_max_new_tokens, timeout,
+            rollout_backend=kwargs.get("rollout_backend", self.rollout_backend),
+            worker_use_singularity=kwargs.get("worker_use_singularity", self.worker_use_singularity),
+            worker_sif_path=kwargs.get("worker_sif_path", self.worker_sif_path),
+            worker_container_root=kwargs.get("worker_container_root", self.worker_container_root),
+            worker_gpu_memory_utilization=kwargs.get("worker_gpu_memory_utilization", self.worker_gpu_memory_utilization),
+            worker_max_model_len=kwargs.get("worker_max_model_len", self.worker_max_model_len),
+            worker_work_dir=kwargs.get("worker_work_dir", self.worker_work_dir),
+        )
         self.restart_count += 1
 
     def shutdown(self) -> None:
@@ -246,7 +391,14 @@ class WorkerPool:
     def __init__(self, model_path: str, adapter_path: str,
                  num_workers: int, devices: List[int],
                  max_rounds: int, max_new_tokens: int, num_rollouts: int,
-                 temperature: float, finalize_max_new_tokens: int, timeout: int):
+                 temperature: float, finalize_max_new_tokens: int, timeout: int,
+                 rollout_backend: str = "hf",
+                 worker_use_singularity: bool = False,
+                 worker_sif_path: str = "",
+                 worker_container_root: str = "",
+                 worker_gpu_memory_utilization: float = 0.85,
+                 worker_max_model_len: int = 32768,
+                 worker_work_dir: str = ""):
         self.num_workers = num_workers
         self.devices = devices
         self.workers: List[PersistentWorkerHandle] = []
@@ -259,12 +411,28 @@ class WorkerPool:
                 model_path, adapter_path, gpu,
                 max_rounds, max_new_tokens, num_rollouts,
                 temperature, finalize_max_new_tokens, timeout,
+                rollout_backend=rollout_backend,
+                worker_use_singularity=worker_use_singularity,
+                worker_sif_path=worker_sif_path,
+                worker_container_root=worker_container_root,
+                worker_gpu_memory_utilization=worker_gpu_memory_utilization,
+                worker_max_model_len=worker_max_model_len,
+                worker_work_dir=worker_work_dir,
             )
             self.workers.append(wh)
 
         self._worker_args = (model_path, adapter_path,
                              max_rounds, max_new_tokens, num_rollouts,
                              temperature, finalize_max_new_tokens, timeout)
+        self._worker_kwargs = {
+            "rollout_backend": rollout_backend,
+            "worker_use_singularity": worker_use_singularity,
+            "worker_sif_path": worker_sif_path,
+            "worker_container_root": worker_container_root,
+            "worker_gpu_memory_utilization": worker_gpu_memory_utilization,
+            "worker_max_model_len": worker_max_model_len,
+            "worker_work_dir": worker_work_dir,
+        }
 
     def map(self, samples: List[dict]) -> List[dict]:
         """Distribute samples round-robin to workers, collect results."""
@@ -290,7 +458,7 @@ class WorkerPool:
                 }
                 # Restart worker
                 try:
-                    wh.restart(*self._worker_args)
+                    wh.restart(*self._worker_args, **self._worker_kwargs)
                     self.restart_count += 1
                 except Exception as re:
                     print(f"    [pool] Failed to restart worker {worker_idx}: {re}")
@@ -549,6 +717,13 @@ class RunReport:
 
 def main() -> None:
     args = parse_args()
+    if args.rollout_backend == "hf" and not args.adapter_path:
+        raise ValueError("--adapter_path is required for rollout_backend=hf")
+    if args.worker_use_singularity:
+        if not args.worker_sif_path or not args.worker_container_root:
+            raise ValueError(
+                "--worker_use_singularity requires --worker_sif_path and --worker_container_root"
+            )
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(os.path.join(args.output_dir, "checkpoints"), exist_ok=True)
@@ -603,6 +778,13 @@ def main() -> None:
             args.max_rounds, args.max_new_tokens, args.num_rollouts,
             args.temperature, args.finalize_max_new_tokens,
             args.worker_timeout,
+            rollout_backend=args.rollout_backend,
+            worker_use_singularity=args.worker_use_singularity,
+            worker_sif_path=args.worker_sif_path,
+            worker_container_root=args.worker_container_root,
+            worker_gpu_memory_utilization=args.worker_gpu_memory_utilization,
+            worker_max_model_len=args.worker_max_model_len,
+            worker_work_dir=args.worker_work_dir,
         )
         print(f"  [pool] {args.num_rollout_workers} workers on devices "
               f"{worker_devices[:args.num_rollout_workers]}")
@@ -614,6 +796,13 @@ def main() -> None:
             args.max_rounds, args.max_new_tokens, args.num_rollouts,
             args.temperature, args.finalize_max_new_tokens,
             args.worker_timeout,
+            rollout_backend=args.rollout_backend,
+            worker_use_singularity=args.worker_use_singularity,
+            worker_sif_path=args.worker_sif_path,
+            worker_container_root=args.worker_container_root,
+            worker_gpu_memory_utilization=args.worker_gpu_memory_utilization,
+            worker_max_model_len=args.worker_max_model_len,
+            worker_work_dir=args.worker_work_dir,
         )
         print(f"  [persistent] worker on GPU {worker_devices[0]}")
 
@@ -662,6 +851,13 @@ def main() -> None:
                                 args.num_rollouts, args.temperature,
                                 args.finalize_max_new_tokens,
                                 args.worker_timeout,
+                                rollout_backend=args.rollout_backend,
+                                worker_use_singularity=args.worker_use_singularity,
+                                worker_sif_path=args.worker_sif_path,
+                                worker_container_root=args.worker_container_root,
+                                worker_gpu_memory_utilization=args.worker_gpu_memory_utilization,
+                                worker_max_model_len=args.worker_max_model_len,
+                                worker_work_dir=args.worker_work_dir,
                             )
                             report.worker_restart_count += 1
                             wres = {"sample_id": sid, "rollouts": [],
@@ -687,6 +883,13 @@ def main() -> None:
                             args.num_rollouts,
                             args.temperature, args.finalize_max_new_tokens,
                             args.worker_timeout,
+                            rollout_backend=args.rollout_backend,
+                            worker_use_singularity=args.worker_use_singularity,
+                            worker_sif_path=args.worker_sif_path,
+                            worker_container_root=args.worker_container_root,
+                            worker_gpu_memory_utilization=args.worker_gpu_memory_utilization,
+                            worker_max_model_len=args.worker_max_model_len,
+                            worker_work_dir=args.worker_work_dir,
                         )
                         w_elapsed = time.time() - t_w
                         report.rollout_times.append(w_elapsed)
@@ -1014,6 +1217,13 @@ def main() -> None:
                         args.max_rounds, args.max_new_tokens, args.num_rollouts,
                         args.temperature, args.finalize_max_new_tokens,
                         args.worker_timeout,
+                        rollout_backend=args.rollout_backend,
+                        worker_use_singularity=args.worker_use_singularity,
+                        worker_sif_path=args.worker_sif_path,
+                        worker_container_root=args.worker_container_root,
+                        worker_gpu_memory_utilization=args.worker_gpu_memory_utilization,
+                        worker_max_model_len=args.worker_max_model_len,
+                        worker_work_dir=args.worker_work_dir,
                     )
 
                 global_step += 1
