@@ -1,0 +1,579 @@
+# sft
+
+本文件用于压缩当前 Echo 项目复现对话上下文。原则：较早内容做摘要；最近 10 个来回尽量完整保留，以便后续继续讨论 SFT、interleaved inference、GRPO、VERL/vLLM 等问题。
+
+---
+
+## 一、较早对话摘要
+
+### 1. 项目主线
+
+当前项目目标是复现 Echo: Towards Advanced Audio Comprehension via Audio-Interleaved Reasoning。核心思想是让 Qwen2.5-Omni-7B 从普通 audio-conditioned text reasoning 进化为 audio-interleaved reasoning：模型在推理中生成 `<seg>start,end</seg>`，系统暂停生成，裁剪原始音频对应片段，将音频片段插回上下文，再继续生成。
+
+论文主流程被理解为：
+
+```text
+带时间标注的音频数据
+-> Qwen2.5-Omni 提取音频文本信息 A1/A2/A3
+-> 结合强标注时间元数据 A4/A5
+-> DeepSeek-R1 生成 QA-CoT
+-> DeepSeek-R1 重评 QA valid / COT valid
+-> 根据重评结果分成 EAQA-SFT / EAQA-RL
+-> SFT 得到 cold-start model
+-> 推理时启用 audio-interleaved inference
+-> 使用 EAQA-RL 做 RL / GRPO
+```
+
+论文分流逻辑：
+
+```text
+QA valid = Yes 且 COT valid = Yes -> SFT
+QA valid = Yes 且 COT valid = No  -> RL，去掉 CoT
+QA invalid                         -> 丢弃
+```
+
+### 2. 已完成的数据与 SFT 工作
+
+项目已经完成：
+
+- AudioSet-Strong parquet -> flac + metadata jsonl。
+- A1/A2/A3 生成：音频描述、语音信息、音乐信息，使用本地 Qwen2.5-Omni。
+- QA skeleton 构建：`start_percentage`、`duration_percentage`、`gap`、`overlap`、`count_before`、`repeated_event_gap`、`duration_compare`、`order`。
+- 早期 SFT 数据混合生成：DeepSeek-R1 润色 + 本地模板。
+- strict SFT jsonl 清洗：保留 messages/audios，检查 `<think>`、`<answer>`、`<seg>`、answer in choices、去标签污染、去重。
+- Qwen2.5-Omni LoRA SFT：ms-swift、lr=5e-6、fp16、QWEN_OMNI_SKIP_SPK=1。
+- 固定评估集 eval_manifest_500 和 eval_from_manifest.py。
+
+早期评估：
+
+```text
+v7: has_seg ≈ 60%, answer_acc ≈ 30%
+v8: has_seg ≈ 27.4%, answer_acc ≈ 44.6%
+v9a-format-clean: has_seg ≈ 39.4%, answer_acc ≈ 42.0%, answer_in_choices 降到 87%
+v9b-diverse-cot-2epoch: has_seg ≈ 99.8%, answer_acc ≈ 43.8%，目前作为较好 cold-start 候选
+```
+
+### 3. 数据 judge 与过滤
+
+实现了 OpenAI-compatible / 第三方中转的 DeepSeek-R1 judge 脚本，支持 base_url、model、api_key_env、resume、retry_failed。20 条 smoke test 全成功，无 API 错误和解析错误。
+
+随后做了 600 条按 source_group + type 分层的 judge：
+
+```text
+total=600
+qa_valid_yes=542, qa_valid_no=58
+cot_valid_yes=501, cot_valid_no=99
+both_valid(SFT)=498
+qa_yes_cot_no(RL)=44
+qa_invalid(discard)=58
+```
+
+按题型结论：
+
+```text
+gap / duration_compare / repeated_event_gap 非常稳，QA valid 100%
+count_before 基本稳
+duration_percentage / order 有一定噪声
+overlap 和 start_percentage 高风险，但不是无价值，只是需要 review/rewrite
+```
+
+后续建立了四类数据分流：SFT、RL、discard、needs_review_or_rewrite。`start_percentage` 和 `deepseek_polished + overlap` 暂时进入 needs_review_or_rewrite，而不是永久丢弃。
+
+### 4. 关于 `<seg>` 后续写风格
+
+检查官方 EAQA_SFT_100subset 后发现：官方 SFT 中 `</seg>` 后接大写字母或 `<` 的情况为 0，大量是：
+
+```text
+</seg>, ...
+</seg> reveals ...
+</seg>, meaning ...
+</seg>, indicating ...
+```
+
+这说明 Echo 官方 SFT 数据天然教了模型“segment 后自然续写”，而不是新开一句或立刻接下一个标签。这个特征对后续 RL 很关键：如果 SFT 没有这种 continuation 风格，Rconsist 只能普遍扣分，GRPO 难以学到相对优势。
+
+结论：
+
+```text
+SFT 教正确写法；
+Rconsist 惩罚偏离写法；
+RL 不是从零教 continuation。
+```
+
+### 5. VLM-R3 对 Echo 的启发
+
+阅读了 VLM-R3：视觉领域的交错推理框架，做法是模型生成 bbox，外部系统裁剪图像、zoom、插回上下文，模型继续推理。
+
+VLM-R3 流程：
+
+```text
+1. 构造 VLIR 数据集
+2. 过滤 bbox 有效性和 reasoning 逻辑
+3. VLIR SFT 得到 cold-start
+4. interactive inference: bbox -> crop/zoom -> visual tokens -> continue
+5. R-GRPO 强化
+6. 主实验、消融、grounding/attention 分析
+```
+
+Echo 与 VLM-R3 对应关系：
+
+```text
+VLM-R3: {"bbox_2d": [...]} -> crop image -> insert visual tokens
+Echo:   <seg>s,e</seg>      -> clip audio  -> insert audio tokens
+```
+
+### 6. MMAR / Qwen2.5-Omni baseline 评估问题
+
+Qwen2.5-Omni 技术报告没有报告 MMAR，只报告 MMAU，MMAU Avg=65.60。Echo 论文中报告 Qwen2.5-Omni on MMAR = 57.33，Table 3 reproduced Base Model = 51.80。
+
+本地 MMAR 自由生成评估发现：
+
+```text
+strict_acc ≈ 33.4%
+fallback_acc ≈ 42.0%
+has_answer_tag ≈ 70.5%
+gibberish / pérdida 死循环约 15-22%
+```
+
+当前判断：本地评估和 Echo 论文 baseline 存在协议或实现差异。需要区分 strict/fallback、prompt、decoding、输入方式、是否 forced-choice/logprob 等。
+
+### 7. GRPO 相关理解
+
+Echo reward：
+
+```text
+R = Rformat + Rconsist + Racc + Rseg
+```
+
+- Rformat：封装格式正确给 0.5。
+- Rconsist：`</seg>` 后下一个文本 token 若为大写或 `<`，每次 -0.1，最多 -0.5。
+- Racc：答案匹配 ground truth 给 0.5。
+- Rseg：答案正确且至少引用一个 segment 给 0.5。
+
+GRPO 解释：reward 是 rollout-level，advantage 是 rollout-level；但 PPO-style ratio / KL 是 token-level，所以训练时仍需要每个生成 token 的 logprob。插入的 audio tokens 是环境注入，不是模型动作，必须参与上下文但不参与 loss。
+
+严格版 interleaved GRPO 应该是：
+
+```text
+audio tokens: 参与 forward / attention / conditioning
+audio tokens: loss mask = 0
+text / <seg> / <answer>: loss mask = 1
+```
+
+当前工程中存在 text-only GRPO approximation：rollout 是 interleaved，但训练 forward/backward 只对 text prompt + final_response 算 logprob。这是可跑基线，但不等价于论文严格版。
+
+### 8. GRPO 工程排查与当前状态
+
+最初完整 batch forward 会在 Qwen2.5-Omni attention 中崩溃。排查发现是 policy forward with grad 的 `(B,T)` 过大。实验：
+
+```text
+bs=1/2/4 OK
+bs>=8 crash
+```
+
+因此采用 policy_forward_micro_batch_size=4 的 micro-batch 方案，已通过 smoke test。
+
+随后 rollout 阶段出现 CUDA device-side assert，进入子进程隔离模式。commit fcc5fdf 添加了 subprocess-isolated rollout workers，worker 子进程跑 interleaved rollouts，主进程做 text-only GRPO forward/backward。20 samples / 3 steps / 12 workers smoke test 通过。
+
+VERL + vLLM 尝试：
+
+- vLLM 0.12.0 绑定 torch 2.9.0。
+- FSDP / DeepSpeed ZeRO-2 / ZeRO-3 都在初始化分布式或模型包装阶段 SIGSEGV。
+- 当前判断：torch 2.9.0 + 当前集群 NCCL/distributed + Qwen2.5-Omni/VERL 组合不稳定。
+- VERL 训练路线暂时不作为主线，除非做环境隔离：vLLM 只做 rollout server，VERL 在稳定 torch 环境中做训练。
+
+---
+
+## 二、最近 10 个来回完整保留
+
+### 回合 1
+
+用户：
+
+那就尝试一下用严格版的修改,以及使用你说的多个worker并行运行,
+
+助手：
+
+可以尝试，但建议分两个分支/两个开关做，不要把“严格版 multimodal loss”和“多 worker 并行”一次性混在主流程里，否则一旦崩，很难定位是哪个改动导致的。
+
+你现在的 fcc5fdf 已经有一个稳定基础：rollout 子进程隔离，主进程只做 text-only GRPO forward/backward，并且 20 samples / 3 steps smoke test 通过。接下来应做：
+
+A. 多 worker 并行 rollout：优先做，风险较低
+B. 严格版 multimodal GRPO loss：作为实验开关，风险较高
+
+建议给 Codex 的任务：新增 `--rollout_worker_mode`、`--num_rollout_workers`、`--worker_devices`；新增 `--grpo_forward_mode text_only/strict_interleaved`。默认保持 text_only。严格版要求重建完整 interleaved sequence：full_audio + prompt + round text + segment audio；loss mask 对 prompt/audio 为 0，对模型生成 text/<seg>/<answer> 为 1。测试顺序为旧模式 -> persistent worker -> pool worker -> strict_interleaved 最小测试。
+
+---
+
+### 回合 2
+
+用户：
+
+pool并行是在多张显卡上面跑还是在一张上面跑
+
+助手：
+
+推荐是在多张显卡上跑。不要默认在一张 GPU 上开多个 pool worker。每个 rollout worker 都要加载一份 Qwen2.5-Omni-7B + LoRA，单张 80GB 卡通常承受不了多个完整 worker，或者会显著抢显存、抢算力，反而更慢、更容易崩。
+
+单卡情况：
+
+```text
+rollout_worker_mode = persistent
+num_rollout_workers = 1
+```
+
+多卡情况：
+
+```text
+rollout_worker_mode = pool
+num_rollout_workers = N
+worker_devices = "0,1,2,3"
+```
+
+每个 worker 绑定一张 GPU。若有多张 GPU，最好 GPU0 做训练，GPU1/GPU2 做 rollout worker。pool 是多卡并行方案；单卡只用 persistent worker。
+
+---
+
+### 回合 3
+
+用户：
+
+我想这个pool模式并不是我想要的,我想要的是单卡多卡都能跑, 最好是vllm或者ver那种架构的并行推理版本
+
+助手：
+
+你说得对：你想要的不是“多张 GPU 每张开一个 worker”的简单 pool，而是更像 vLLM / verl actor 架构的 rollout 服务化并行推理。
+
+理想结构是：
+
+```text
+Trainer Process
+  - sampling batch
+  - reward
+  - GRPO loss
+  - backward / optimizer step
+
+Rollout Engine / Rollout Server
+  - 常驻加载 policy model
+  - 接收多个 rollout request
+  - 支持 batch / async / queue
+  - 执行 interleaved generation
+  - 返回 final_response、segments、round info
+
+Weight Sync
+  - 每隔 N step 把 trainer 当前 LoRA / policy weights 同步给 rollout engine
+```
+
+Echo 的特殊难点是 rollout 不是普通 prompt -> response，而是 generate 到 `<seg>` 后要暂停、裁剪音频、追加 audio、继续生成。因此建议先做自定义 persistent rollout server，不要直接接 vLLM。后端抽象：`HFBackend` 先实现，未来再加 `VLLMBackend`。
+
+给 Codex 的方向：新增 `rollout_server.py`、`rollout_client.py`、`rollout_backend_hf.py`，实现 rollout engine / rollout server 架构。单卡默认 1 个 server；多卡多个 server；后续再替换为 vLLM。
+
+---
+
+### 回合 4
+
+用户：
+
+回看论文,论文是怎么处理的
+
+助手：
+
+按 Echo 论文原文，它没有手写父进程/子进程隔离 worker pool。它更接近 verl / vLLM 架构：
+
+```text
+RL 框架：VERL
+rollout 推理：vLLM engine
+优化算法：GRPO
+每个 query 采样 8 条 rollout
+batch size = 64
+mini-batch size = 32
+KL coefficient = 0.04
+temperature = 1.0
+```
+
+论文说 SFT 用 ms-swift，RL 用 VERL，rollout 推理使用 vLLM engine。interleaved rollout 的逻辑是：输入原始音频 A + 问题 q，生成到 `<seg>s,e</seg>` 后暂停，裁剪 A[s:e]，把当前输出 o + 裁剪音频追加回上下文，继续生成。
+
+论文没有展开 vLLM 怎么支持中途插入音频、trainer 和 rollout engine 如何通信、CUDA 崩溃怎么恢复。你现在遇到的子进程隔离是复现工程中的额外问题。
+
+结论：论文是用 VERL 管 RL、vLLM 管 rollout。你应该往常驻 rollout engine / worker server 方向靠，不应继续 per-sample subprocess。
+
+---
+
+### 回合 5
+
+用户：
+
+我现在正在尝试修改为常驻模型, 接下来告诉我怎么继续往"RL 用 VERL，rollout 推理使用 vLLM engine；RL 采样温度为 1.0"这个方向走, 我不希望自己造轮子, 可以下载这两个框架, 然后我们针对性的优化
+
+助手：
+
+可以往 VERL + vLLM 方向走，但建议分阶段，不要一次性推倒现有代码。论文确实是：SFT 用 ms-swift，RL 用 VERL，rollout inference 用 vLLM，rollout temperature=1.0。
+
+路线：
+
+```text
+阶段 1：验证 vLLM 是否能跑 Qwen2.5-Omni 音频输入
+阶段 2：用 vLLM 做 interleaved rollout engine
+阶段 3：用 VERL 接管 GRPO 训练
+```
+
+第一阶段新增 vLLM smoke：测试 vLLM 加载 Qwen2.5-Omni、单音频、多音频、LoRA、stop words、token ids/logprobs。第二阶段抽象 rollout backend：HF backend 保留，vLLM backend 仅在兼容通过后启用。第三阶段用 VERL trainer，替换 rollout worker / actor 的 generate_sequences。短期仍保留 text-only GRPO fallback；strict interleaved loss 后续再做。
+
+---
+
+### 回合 6
+
+用户：
+
+三个阶段全部完成，以下是所做工作的概要：
+
+阶段 1 — vllm_qwen_omni_audio_smoke.py
+独立诊断脚本，6 个测试用例：
+
+vLLM 加载 Qwen2.5-Omni-7B 模型
+单音频输入生成
+多音频输入（全音频 + 裁剪片段）
+LoRA adapter 支持
+stop words（</seg>, </answer>）停止机制
+token IDs / logprobs 输出
+输出 output/vllm_smoke/vllm_compat_report.json。vLLM 未安装或模型不存在时会优雅跳过。
+
+阶段 2 — scripts/rl_backends/ 下 5 个文件
+rollout_backend_base.py — 抽象基类 RolloutBackend + GenerationResult 数据类
+rollout_backend_hf.py — HF 后端，封装 model.generate() + SegStoppingCriteria，保持 fcc5fdf 行为不变
+rollout_backend_vllm.py — vLLM 后端，参照官方 inference/inference_multiturn.py 模式
+interleaved_rollout_controller.py — 后端无关的多轮控制器，支持全部现有策略（stop/ignore/insert_once、finalize、silent/context/standard 继续模式），--rollout_backend hf/vllm 切换
+__init__.py — 包导出
+阶段 3 — tasks/09_verl_vllm_migration_plan.md
+设计文档，7 个章节：
+
+VERL 的职责（GRPO 训练循环）
+vLLM 的职责（rollout 生成）
+自定义 interleaved 控制器（generate_sequences 中的 <seg> 检测和音频裁剪）
+Reward 对接（Rformat + Rconsist + Racc + Rseg）
+Audio tokens 在 loss 中的 masking（151645-151648 从 response_mask 中排除）
+Text-only GRPO 保留作为 fallback
+5 步迁移路径（SFT → merge → Parquet → VERL 训练 → 推理）
+现有代码完全未动 — fcc5fdf 版本的所有文件（scripts/rl/、scripts/03_interleaved/、scripts/04_grpo_smoke/）保持不变。
+
+助手：
+
+方向正确。下一步是验收 `output/vllm_smoke/vllm_compat_report.json`，确认 vLLM 是否真的支持：模型加载、单音频、多音频、LoRA、stop words、token ids/logprobs。如果关键项失败，不启用 vLLM backend，继续用 HF backend。
+
+注意：文档里写 audio token masking 为 151645-151648，需要谨慎。不要只硬编码，应优先从 tokenizer/config 里读取 audio_token_index、audio_bos/eos token id、audio special tokens；读取失败再 fallback 到 151645-151648，并在 report 中标记。
+
+当前路线：短期主线仍是 fcc5fdf isolated HF rollout + text-only GRPO；并行探索 vLLM backend；中期接 VERL GRPO；长期再做 strict_interleaved forward + audio loss mask。
+
+---
+
+### 回合 7
+
+用户：
+
+又失败了。 CUDA_LAUNCH_BLOCKING=0 也没用。
+
+停止尝试，按你说的生成总结。
+
+VERL GRPO 运行尝试总结（6次）
+环境
+硬件: 2× A800-SXM4-80GB (80GB × 2)，node42
+模型: Qwen2.5-Omni-7B (8.93B params)，base + v9b LoRA 合并版
+数据: EAQA_RL_smoke20.parquet (20 samples)
+框架: PyTorch 2.9.0+cu128, vLLM 0.12.0, NCCL 2.27.5, Ray (VERL 内置)
+关键约束
+vLLM 0.12.0 强制依赖 torch==2.9.0，无法降级 torch
+flash_attn 包编译失败（nvcc 版本不匹配），已用 SDPA fallback 绕过
+flash_attn.bert_padding 函数已用 PyTorch 原生实现替换
+崩溃模式
+# attn KL loss NCCL CUDA_BLOCKING 提交 崩溃
+1 sdpa True 默认 1 SSH nohup SIGSEGV at ref_policy_wg.init_model()
+2 sdpa False 默认 1 SSH nohup SIGSEGV at actor_rollout_wg.init_model()
+3 eager False 默认 1 SSH nohup SIGSEGV at actor_rollout_wg.init_model()
+4 eager False P2P_IB_DISABLE 1 SLURM 42040 ValueError: ROCR_VISIBLE_DEVICES
+5 eager False P2P_IB_DISABLE 1 SLURM 42042 SIGSEGV at actor_rollout_wg.init_model()
+6 sdpa False P2P_IB_DISABLE 0 SLURM 42043 SIGSEGV at actor_rollout_wg.init_model()
+核心发现
+SIGSEGV 100% 复现，所有 6 次尝试在同一位置崩溃（checkpoint 加载完 → wrap_policy 打印 → 两个 worker 同一微秒 SIGSEGV）
+不是注意力实现问题：SDPA 和 eager 都崩溃
+不是 KL loss / ref 模型问题：去掉后仍然崩溃
+不是 NCCL 通信设置问题：P2P_DISABLE + IB_DISABLE 无效
+不是 CUDA_LAUNCH_BLOCKING 问题：设 0 也崩
+极大概率是 torch 2.9.0 FSDP 在 Qwen2.5-Omni 架构上的 bug
+已做的代码修改（当前状态）
+verl/verl/workers/fsdp_workers.py: attn_implementation="sdpa"（3处）
+verl/verl/workers/actor/dp_actor.py: flash_attn fallback to PyTorch
+verl/verl/utils/flash_attn_fallback.py: 新建 PyTorch 原生 unpadding 实现
+scripts/rl/submit_verl_grpo_smoke.sh: 论文风格 GRPO 配置（no KL, n=8, T=1.0）
+未尝试的方向
+单 GPU（n_gpus_per_node=1，FSDP 不做跨 GPU 分片）
+DeepSpeed ZeRO 替代 FSDP
+torch 2.9.0 源码 patch
+
+助手：
+
+VERL 路线可以先暂停。6 次尝试说明当前 torch 2.9.0 + vLLM 0.12.0 + VERL FSDP + Qwen2.5-Omni 的组合不稳定，继续硬调代价很高。
+
+这像底层组合问题，而不是 reward、dataset、prompt、LoRA 逻辑错误。建议不要继续 patch VERL FSDP。可以把 VERL 标记为 blocked by environment/framework incompatibility。
+
+下一步主线应回到已经可跑的自定义 GRPO：subprocess isolated rollout + text-only GRPO forward/backward + micro-batch。后续优化 persistent rollout worker。可选低优先级实验：单 GPU VERL smoke，DeepSpeed ZeRO 可行性，torch 2.9 patch 不建议。
+
+---
+
+### 回合 8
+
+用户：
+
+我想先看看DeepSpeed ZeRO 替代 FSDP,预估一下工程量
+
+助手：
+
+DeepSpeed ZeRO 替代 FSDP 是中等到高工程量路线。分三档：
+
+```text
+最小尝试：1-2 天
+中等可用：3-5 天
+深度接入：1-2 周+
+```
+
+如果只是验证“FSDP 是不是罪魁祸首”，做独立 DeepSpeed ZeRO smoke 即可：加载 Qwen2.5-Omni + LoRA，deepspeed.initialize，做 text-only forward/backward/step，外加 audio input no_grad。这个 0.5-1 天。
+
+如果把自定义 GRPO 改成 DeepSpeed ZeRO，工程量 2-4 天，比改 VERL 简单，因为你掌控训练循环。
+
+如果让 VERL 使用 DeepSpeed ZeRO 替代 FSDP，可能要改 VERL worker abstraction、actor/ref/reward/rollout 分组、checkpoint/load/save、LoRA 同步、多模态 collator，5-10 天起，不建议现在直接做。
+
+建议先做独立 DeepSpeed ZeRO smoke。若 smoke 通过，再考虑自定义 GRPO + DeepSpeed；不要直接改 VERL。
+
+---
+
+### 回合 9
+
+用户：
+
+vllm绑死torch2.9.0吗
+
+随后补充：
+
+报告没保存——SIGSEGV 是 C 层信号，Python try/except 抓不住，进程直接被杀。
+
+最终完整总结（含 DeepSpeed 测试）：
+
+# 框架 注意 KL NCCL 结果 崩溃位置
+1 FSDP sdpa on default SIGSEGV ref_policy_wg.init_model()
+2 FSDP sdpa off default SIGSEGV actor_rollout_wg.init_model()
+3 FSDP eager off default SIGSEGV actor_rollout_wg.init_model()
+4 FSDP eager off P2P/IB disable ROCR error Ray worker init
+5 FSDP eager off P2P/IB disable+unset ROCR SIGSEGV actor_rollout_wg.init_model()
+6 FSDP sdpa off P2P/IB disable+unset ROCR+CUDA_BLOCKING=0 SIGSEGV actor_rollout_wg.init_model()
+7 DeepSpeed ZeRO-2 sdpa off default SIGSEGV deepspeed.initialize()
+8 DeepSpeed ZeRO-3 sdpa off default SIGSEGV deepspeed.initialize()
+核心结论：torch 2.9.0 的 NCCL 通信层有 bug，任何分布式框架（FSDP / DeepSpeed / ZeRO-2 / ZeRO-3）在初始化 NCCL collective 操作时都触发 SIGSEGV。模型本身加载、LoRA 都正常。问题 100% 在 torch 2.9.0 的分布式通信层。
+
+助手：
+
+vLLM 不是永远绑定 torch 2.9.0，但某个 vLLM 版本会强依赖某个 PyTorch 版本。当前 vLLM 0.12.0 强制依赖 torch==2.9.0，所以你这个环境等于是被 torch 2.9.0 绑死了。
+
+你 8 次实验显示 FSDP、DeepSpeed ZeRO-2、ZeRO-3 都在 torch 2.9.0 环境下 SIGSEGV，说明问题更像 torch 2.9.0 + 当前 CUDA/NCCL/驱动/集群环境 + 多进程分布式初始化。
+
+路线：
+
+- 保留 vLLM 0.12.0 只做推理，不做分布式训练。
+- 如要训练，使用稳定 torch 环境，避免 vLLM 0.12.0 强制 torch 2.9。
+- 若要测试旧 vLLM + 旧 torch，必须新建独立环境，不污染主环境。
+- 当前训练主线继续用自定义 GRPO。
+
+---
+
+### 回合 10
+
+用户：
+
+论文中vllm好像就是只用于推理, verl才是用于训练的
+
+助手：
+
+对，这个理解是对的。论文里的分工是：
+
+```text
+VERL = RL 训练框架 / GRPO 更新框架
+vLLM = rollout 推理引擎 / 采样引擎
+```
+
+Echo 附录 G 写的是：RL process 使用 VERL engine，model inference during rollout 使用 vLLM engine。也就是说 VERL 控制训练循环，vLLM 只负责 rollout 阶段快速生成。
+
+这意味着可以把训练和推理环境拆开：
+
+```text
+Env A: training env
+  稳定 torch 版本
+  自定义 GRPO 或 VERL training
+  policy/ref logprob + backward
+
+Env B: rollout env
+  vLLM 0.12.0 + torch 2.9.0
+  只做 inference
+  通过 HTTP / Ray / queue 提供 rollout
+```
+
+但需要解决权重同步：每 N step trainer 保存/合并 LoRA，rollout server reload 最新 LoRA。不要把 vLLM 0.12 的 torch 2.9 环境和 VERL/FSDP/DeepSpeed 训练环境绑在一起。
+
+用户随后问：
+
+等一下,我修改一下, 那就是把 vLLM 独立成 rollout server，只负责 generate。但是训练主线还是要尝试verl来做训练,你觉得可行吗
+
+助手回答：
+
+可行，但前提是 VERL 训练环境必须绕开当前 torch 2.9.0 分布式 SIGSEGV。路线要拆成：
+
+```text
+A. vLLM 独立成 rollout server，只负责 generate
+B. VERL 只负责训练，但必须使用稳定的 torch / distributed 环境
+```
+
+推荐架构：
+
+```text
+Env A: rollout 环境
+  vLLM 0.12.0
+  torch 2.9.0
+  只启动 vLLM rollout server
+  不做 distributed training
+  不做 backward
+
+Env B: training 环境
+  稳定 torch 版本，例如之前 SFT/自定义 GRPO 能跑的环境
+  VERL trainer
+  不加载 vLLM
+  负责 policy/ref logprob + GRPO backward
+```
+
+通信方式：VERL trainer 通过 HTTP / Ray / ZeroMQ / 文件队列请求 vLLM server。权重同步：每 N step trainer 保存 LoRA / policy checkpoint，vLLM rollout server reload 最新 LoRA。
+
+注意：如果 VERL trainer 仍然在 torch 2.9 环境下跑，即使 vLLM 独立出去，VERL 训练仍可能 SIGSEGV。应先做 VERL training-only smoke，不用 vLLM、不用 interleaved audio，只验证 actor/ref/policy 初始化、logprob、backward、optimizer step。
+
+---
+
+## 三、当前下一步建议
+
+1. 把 `Echo_experiment_progress_context.md` 同步更新，因为它仍停留在较早阶段，缺少：
+   - v9b/v10 结果
+   - MMAR baseline 排查
+   - VLM-R3 分析
+   - official SFT subset 的 `</seg>` 后续写统计
+   - GRPO micro-batch 成功
+   - CUDA device-side assert 与 isolated rollout
+   - VERL/vLLM/DeepSpeed 失败总结
+   - vLLM rollout server + stable torch VERL training env 的新路线
+
+2. 短期主线仍以自定义 GRPO 为可跑基线：
+
+```text
+isolated rollout / persistent rollout worker
+text-only GRPO fallback
+micro-batch policy forward
+```
+
+3. 并行探索：vLLM 只做 rollout server，训练环境不绑定 torch 2.9。
+
+4. 若继续 VERL：必须先在稳定 torch 环境中做 training-only smoke，不安装 vLLM 0.12，不使用 torch 2.9。
+
+5. 严格版 interleaved GRPO forward 后续再做：音频 token 参与上下文，但 loss mask=0；文本、<seg>、<answer> loss mask=1。
