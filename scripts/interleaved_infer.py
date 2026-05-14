@@ -280,7 +280,6 @@ def run_generation(model, processor, conversation, audio_list,
     gen_kwargs = {
         "max_new_tokens": max_new_tokens,
         "return_audio": False,
-        "speaker": None,
     }
     if temperature > 0:
         gen_kwargs["do_sample"] = True

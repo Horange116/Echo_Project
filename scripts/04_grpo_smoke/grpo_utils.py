@@ -173,6 +173,7 @@ def build_rollout_metadata(result: dict) -> dict:
         "round_count": result.get("total_rounds", 0),
         "finalize_triggered": stop_reason.startswith("finalize_"),
         "stop_reason": stop_reason,
+        "avg_logprob": result.get("avg_logprob"),
     }
 
 

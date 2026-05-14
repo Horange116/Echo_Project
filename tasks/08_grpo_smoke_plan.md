@@ -945,3 +945,50 @@ ray.exceptions.ActorDiedError: Worker unexpectedly exits with a connection error
 
 ### 修订后的根因分析
 问题**不是多 GPU NCCL 通信**，而是更底层：**torch 2.9.0 + Qwen2.5-Omni + FSDP 模型包装在 Ray worker 中 SIGSEGV**，与 GPU 数量无关。模型加载正常，FSDP `_build_model_optimizer()` 内的 `wrap_policy` 一执行就崩。
+
+## 35. Confidence-Weighted Reward Alignment（2026-05-14）
+
+### 改动文件
+
+| 文件 | 改动 |
+|------|------|
+| `scripts/rl_rollout/echo_interleaved_rollout_controller.py` | vLLM `SamplingParams(logprobs=1)` 捕获逐 token logprob；`EchoRolloutState` 新增 `logprob_sum`/`logprob_count`；`_serialize_state()` 输出 `avg_logprob` |
+| `scripts/rl/isolated_rollout_worker.py` | `_convert_batched_rollout_to_legacy()` 中传递 `avg_logprob` |
+| `scripts/04_grpo_smoke/grpo_utils.py` | `build_rollout_metadata()` 输出 `avg_logprob` |
+| `echo_rl/rewards.py` | `r_acc()` 新增 `avg_logprob` 参数 + confidence-weighted score 公式；`total_reward()` 传递 `avg_logprob` |
+| `echo_rl/rollout_rewards.py` | `rollout_reward()` 提取 `rollout_metadata.get("avg_logprob")` 传递给 `total_reward` |
+| `scripts/rl/rollout_smoke_test.py` | `all_metrics` dict 新增 `avg_logprob` 字段 |
+
+### 论文对齐公式
+
+VERL `multiturn_rl_6` 使用的 confidence-weighted accuracy：
+
+```
+confidence = exp(old_log_probs[answer_token_index])
+if correct:  acc_score = 0.5 * (1 - (confidence - 1)^2)
+else:        acc_score = -0.5 * confidence^2
+```
+
+自定义 `r_acc()` 使用相同公式，confidence 来源为 rollout 的 `avg_logprob`（所有生成 token 的平均 log-prob），并做 `[0, 1]` 截断保护。
+
+### 验证结果（test28, 2026-05-14）
+
+| 测试项 | 结果 |
+|--------|------|
+| 1. 核心公式验证 | ✅ 公式计算正确，高信度→接近±0.5，低信度→接近0 |
+| 2. r_acc 合成测试 | ✅ 8/8 场景通过，含正确/错误×高/低信度 |
+| 3. 后向兼容 | ✅ `avg_logprob=None` → 保持 0.5/0 二值匹配 |
+| 4. 边界条件 | ✅ 空 gt、无 answer tag、信度截断、None 模式 |
+| 5. VERL 公式对齐 | ✅ 6 个 logprob 值完全一致（差异 < 1e-6） |
+| 6. End-to-end total_reward | ✅ confidence-weighted accuracy < binary accuracy |
+| 7. 真实 rollout 数据 | ✅ 无回归（旧数据 avg_logprob=None，走二值路径） |
+
+### Custom vs VERL 差异
+
+| 维度 | VERL | Custom |
+|------|------|--------|
+| Confidence 来源 | `old_log_probs[first_answer_token]` — 单 token log-prob | `avg_logprob` — 所有生成 token 平均 log-prob |
+| Confidence 截断 | 无 | `[0, 1]` 截断（仅在 avg_logprob > 0 生效，罕见） |
+| 公开参数 | tokenizer + `old_log_probs` tensor | 纯标量，不依赖 tokenizer |
+
+公式本身数学等价，差异仅 confidence 来源。单 token vs 平均 log-prob 不会改变 GRPO 训练的有效性，因为 reward 信号最终反映的是整体回答质量。

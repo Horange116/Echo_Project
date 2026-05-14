@@ -19,6 +19,7 @@ to perform generation.
 """
 
 import contextlib
+import os
 
 import torch
 import torch.distributed
@@ -34,6 +35,8 @@ from verl.utils.device import get_torch_device
 from .base import BaseRollout
 
 __all__ = ["HFRollout"]
+
+_ECHO_DEBUG = os.environ.get("ECHO_DEBUG_SEQUENCE_LENGTH", "0") == "1"
 
 
 class HFRollout(BaseRollout):
@@ -100,6 +103,45 @@ class HFRollout(BaseRollout):
         eos_token_id = prompts.meta_info["eos_token_id"]
         pad_token_id = prompts.meta_info["pad_token_id"]
 
+        if _ECHO_DEBUG:
+            print("=== ECHO_DEBUG: _generate_minibatch input ===")
+            print(f"  prompts.batch keys: {list(prompts.batch.keys())}")
+            print(f"  prompts.non_tensor_batch keys: {list(prompts.non_tensor_batch.keys())}")
+            print(f"  prompts.meta_info: {prompts.meta_info}")
+            print(f"  input_ids shape: {idx.shape}, dtype: {idx.dtype}")
+            print(f"  attention_mask shape: {attention_mask.shape}, dtype: {attention_mask.dtype}")
+            print(f"  position_ids shape: {position_ids.shape}, dtype: {position_ids.dtype}")
+            print(f"  prompt_length (idx.size(1)): {prompt_length}")
+            print(f"  response_length (config): {response_length}")
+            print(f"  expected sequence_length: {prompt_length + response_length}")
+            # per-sample prompt token length (count non-pad tokens)
+            for i in range(idx.size(0)):
+                num_pad = (idx[i] == pad_token_id).sum().item()
+                actual_prompt_len = prompt_length - num_pad
+                print(f"  sample[{i}]: total={prompt_length}, pad_tokens={num_pad}, actual_prompt_len={actual_prompt_len}")
+            # check multi_modal_data
+            if "multi_modal_data" in prompts.non_tensor_batch:
+                mm_data = prompts.non_tensor_batch["multi_modal_data"]
+                print(f"  multi_modal_data keys: {list(mm_data.keys()) if isinstance(mm_data, dict) else type(mm_data)}")
+                if isinstance(mm_data, dict) and "audio" in mm_data:
+                    audios = mm_data["audio"]
+                    print(f"  multi_modal_data audio: {len(audios)} entries, type: {type(audios[0])}")
+            elif "multi_modal_inputs" in prompts.non_tensor_batch:
+                mm = prompts.non_tensor_batch["multi_modal_inputs"]
+                if isinstance(mm, dict):
+                    print(f"  multi_modal_inputs keys: {list(mm.keys())}")
+                    for k, v in mm.items():
+                        if hasattr(v, 'shape'):
+                            print(f"    {k}: shape={v.shape}")
+                        elif isinstance(v, (list, tuple)):
+                            print(f"    {k}: len={len(v)}, type={type(v[0]) if v else 'empty'}")
+                        else:
+                            print(f"    {k}: type={type(v)}")
+            print(f"  max_prompt_length (config): {self.config.get('max_prompt_length', 'N/A')}")
+            print(f"  max_response_length (config): {self.config.get('max_response_length', 'N/A')}")
+            print(f"  truncation (config): {self.config.get('truncation', 'N/A')}")
+            print("=============================================")
+
         self.module.eval()
         param_ctx = contextlib.nullcontext()
 
@@ -134,6 +176,36 @@ class HFRollout(BaseRollout):
             delta_tokens = torch.ones(size=(generated_batch_size, delta_length), device=seq.device, dtype=seq.dtype)
             delta_tokens = pad_token_id * delta_tokens
             seq = torch.cat((seq, delta_tokens), dim=1)
+
+        if _ECHO_DEBUG:
+            print("=== ECHO_DEBUG: pre-assertion state ===")
+            print(f"  seq.shape: {seq.shape}")
+            print(f"  prompt_length: {prompt_length}")
+            print(f"  response_length (config): {response_length}")
+            print(f"  sequence_length (expected): {sequence_length}")
+            print(f"  generated_batch_size: {generated_batch_size}")
+            print(f"  delta_length: {delta_length} (positive=needed padding, negative=output longer than expected)")
+            print(f"  seq min/max token_id: {seq.min().item()} / {seq.max().item()}")
+            print(f"  pad_token_id: {pad_token_id}")
+            print(f"  eos_token_id: {eos_token_id}")
+            print(f"  output.sequences shape before potential pad: {output.sequences.shape}")
+            if hasattr(output, 'scores') and output.scores is not None:
+                print(f"  output.scores: {len(output.scores)} elements")
+            # Check if output sequence contains BOS at start (position 0)
+            prompt_start_tokens = seq[:, :5].tolist() if seq.size(1) >= 5 else seq.tolist()
+            print(f"  first 5 tokens of seq: {prompt_start_tokens}")
+            # Compare input_ids first/last to output seq first/last
+            print(f"  input_ids first 5: {idx[0, :5].tolist() if idx.size(1) >= 5 else idx[0].tolist()}")
+            print(f"  input_ids last 5: {idx[0, -5:].tolist()}")
+            # Check per-sample generated lengths
+            for i in range(seq.size(0)):
+                # Find EOS position relative to prompt end
+                response_part = seq[i, prompt_length:]
+                eos_positions = (response_part == eos_token_id).nonzero(as_tuple=True)[0]
+                actual_response_len = eos_positions[0].item() if len(eos_positions) > 0 else response_part.size(0)
+                print(f"  sample[{i}]: total_seq_len={seq.size(1)}, actual_response_len={actual_response_len} (first_eos_pos)")
+            print("========================================")
+
         assert seq.shape[1] == sequence_length
 
         # make necessary reputations if num_return_sequences > 1

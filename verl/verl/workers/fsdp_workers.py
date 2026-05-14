@@ -652,6 +652,27 @@ class ActorRolloutRefWorker(Worker):
 
         assert self._is_rollout
 
+        if os.environ.get("ECHO_DEBUG_SEQUENCE_LENGTH", "0") == "1":
+            print("=== ECHO_DEBUG: fsdp_workers.generate_sequences entry ===")
+            print(f"  prompts.batch keys: {list(prompts.batch.keys())}")
+            print(f"  prompts.non_tensor_batch keys: {list(prompts.non_tensor_batch.keys())}")
+            print(f"  prompts.meta_info: {prompts.meta_info}")
+            for k, v in prompts.batch.items():
+                if hasattr(v, 'shape'):
+                    print(f"  batch[{k}]: shape={v.shape}, dtype={v.dtype}")
+                elif isinstance(v, (list, tuple)):
+                    print(f"  batch[{k}]: len={len(v)}")
+                else:
+                    print(f"  batch[{k}]: type={type(v)}")
+            if "multi_modal_inputs" in prompts.non_tensor_batch:
+                mm = prompts.non_tensor_batch["multi_modal_inputs"]
+                if isinstance(mm, dict):
+                    print(f"  multi_modal_inputs keys: {list(mm.keys())}")
+            if "multi_modal_data" in prompts.non_tensor_batch:
+                mm_data = prompts.non_tensor_batch["multi_modal_data"]
+                print(f"  multi_modal_data present, type: {type(mm_data)}")
+            print("=================================================")
+
         # meta_info = {
         #     "eos_token_id": self.generation_config.eos_token_id if self.generation_config is not None else self.tokenizer.eos_token_id,
         #     "pad_token_id": self.generation_config.pad_token_id if self.generation_config is not None else self.tokenizer.pad_token_id,

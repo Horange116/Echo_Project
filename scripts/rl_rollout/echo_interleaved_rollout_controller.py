@@ -83,6 +83,9 @@ class EchoRolloutState:
     duplicate_iou_threshold: float = DEFAULT_DUPLICATE_IOU_THRESHOLD
     finalize_max_tokens: int = DEFAULT_FINALIZE_MAX_TOKENS
     work_dir: Optional[str] = None
+    # Confidence tracking: accumulated log-probs from vLLM rollout
+    logprob_sum: float = 0.0
+    logprob_count: int = 0
     phase: str = "interleaved"  # interleaved | finalize | done | error
     round_index: int = 0
     seen_seg_count: int = 0
@@ -341,6 +344,7 @@ class EchoVLLMBatchedRolloutController:
             max_tokens=max_tokens,
             stop=stop_words,
             skip_special_tokens=False,
+            logprobs=1,
         )
 
         outputs = self.model.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
@@ -351,6 +355,14 @@ class EchoVLLMBatchedRolloutController:
                 state.phase = "error"
                 state.finish_reason = "error"
                 continue
+
+            # Capture token-level logprobs for confidence computation
+            if out.logprobs:
+                for step_lp in out.logprobs:
+                    for token_id, lp_info in step_lp.items():
+                        state.logprob_sum += lp_info.logprob
+                        state.logprob_count += 1
+
             response = _append_stop_token(out.text or "", getattr(out, "stop_reason", None))
             stop_reason = _map_finish_reason(out)
             if phase == "finalize":
@@ -517,12 +529,14 @@ class EchoVLLMBatchedRolloutController:
 
     def _serialize_state(self, state: EchoRolloutState) -> dict:
         pred = extract_answer(state.full_response)
+        avg_logprob = (state.logprob_sum / state.logprob_count) if state.logprob_count > 0 else None
         return {
             "request_id": state.request_id,
             "sample_id": state.sample_id,
             "rollout_id": state.rollout_id,
             "final_response": state.full_response,
             "model_prediction": pred,
+            "avg_logprob": avg_logprob,
             "segments": state.segments,
             "unique_segments": [
                 {

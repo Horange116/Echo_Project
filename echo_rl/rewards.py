@@ -7,6 +7,7 @@ verl dependency.  Designed to be composable inside a GRPO reward loop.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -124,18 +125,32 @@ def _first_non_ws(text: str) -> str:
     return ""
 
 
-def r_acc(response: str, gt_answer: str) -> float:
+def r_acc(response: str, gt_answer: str, avg_logprob: float | None = None) -> float:
     """Accuracy reward (max 0.5).
 
-    The extracted answer must match the ground truth after
-    normalisation.
+    When ``avg_logprob`` is provided, uses confidence-weighted scoring
+    matching VERL's ``multiturn_rl_6``::
+
+        confidence = exp(avg_logprob)
+        if correct:  score = 0.5 * (1 - (confidence - 1)^2)
+        else:        score = -0.5 * confidence^2
+
+    Without ``avg_logprob`` (or during validation) falls back to binary
+    exact match (0.5 / 0).
     """
     if not gt_answer:
         return 0.0
     pred = extract_answer(response)
     if not pred:
         return 0.0
-    return 0.5 if normalize_answer(pred) == normalize_answer(gt_answer) else 0.0
+    correct = normalize_answer(pred) == normalize_answer(gt_answer)
+    if avg_logprob is not None:
+        confidence = min(1.0, max(0.0, math.exp(avg_logprob)))
+        if correct:
+            return 0.5 * (1.0 - (confidence - 1.0) ** 2)
+        else:
+            return -0.5 * (confidence ** 2)
+    return 0.5 if correct else 0.0
 
 
 def r_seg(response: str, gt_answer: str) -> float:
@@ -159,7 +174,8 @@ def r_seg(response: str, gt_answer: str) -> float:
 # ---------------------------------------------------------------------------
 
 def total_reward(response: str, gt_answer: str,
-                 consist_mode: str = "paper") -> dict[str, Any]:
+                 consist_mode: str = "paper",
+                 avg_logprob: float | None = None) -> dict[str, Any]:
     """Return a dict with all component rewards and the sum.
 
     Parameters
@@ -167,11 +183,14 @@ def total_reward(response: str, gt_answer: str,
     consist_mode : str
         Passed through to :func:`r_consist`.  Default ``"paper"`` so
         consistency acts as a penalty (≤ 0).
+    avg_logprob : float or None
+        If provided, :func:`r_acc` uses confidence-weighted scoring
+        matching VERL ``multiturn_rl_6``.
     """
     rew = {
         "format": r_format(response),
         "consistency": r_consist(response, mode=consist_mode),
-        "accuracy": r_acc(response, gt_answer),
+        "accuracy": r_acc(response, gt_answer, avg_logprob=avg_logprob),
         "segment": r_seg(response, gt_answer),
     }
     rew["total"] = sum(rew.values())

@@ -76,6 +76,8 @@ def _load_runtime(args: argparse.Namespace) -> Tuple[Any, Any]:
         model, processor = load_model_and_processor(
             args.model_path, args.adapter_path or None,
         )
+        # Disable talker for text-only inference (avoids speaker assignment error)
+        model.base_model.disable_talker()
         model.eval()
         return model, processor
 
@@ -116,6 +118,7 @@ def _convert_batched_rollout_to_legacy(rollout: dict, sample: dict) -> dict:
         "rollout_id": rollout.get("rollout_id"),
         "final_response": rollout.get("final_response", "") or "",
         "pred_answer": pred_answer,
+        "avg_logprob": rollout.get("avg_logprob"),
         "total_rounds": len(rounds),
         "used_segments": used_segments,
         "used_segment_paths": [

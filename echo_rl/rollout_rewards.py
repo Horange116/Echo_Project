@@ -33,7 +33,10 @@ def rollout_reward(
     consist_mode:
         Passed through to ``r_consist``.
     """
-    base = total_reward(response, gt_answer, consist_mode=consist_mode)
+    avg_logprob = None
+    if rollout_metadata:
+        avg_logprob = rollout_metadata.get("avg_logprob")
+    base = total_reward(response, gt_answer, consist_mode=consist_mode, avg_logprob=avg_logprob)
     out = {**base}
     out["rollout_total"] = round(base["total"], 4)
     return out
